@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.bak
+.DS_Store
+.demo_cli_recovery/
+.env
+.env.*
+demo_cli_receipts.jsonl
