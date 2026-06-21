@@ -129,7 +129,7 @@ con.executemany("INSERT INTO migrations VALUES (?,?,?)", [
 con.commit()
 
 # Print summary
-print("\nproduction.db created — real e-commerce database")
+print("\nproduction.db created - real e-commerce database")
 print("="*50)
 for tbl in ["users","products","orders","order_items","migrations"]:
     n = con.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]

@@ -26,16 +26,16 @@ def _rows(path):
         con = sqlite3.connect(path); cur = con.cursor()
         cur.execute("SELECT COUNT(*) FROM users"); n = cur.fetchone()[0]; con.close(); return n
     except Exception:
-        return "— (table gone)"
+        return "- (table gone)"
 
 def run():
     work = tempfile.mkdtemp(prefix="demo_cli-demo-")
     db, rec = os.path.join(work, "prod.db"), os.path.join(work, "receipts.jsonl")
     _make_db(db)
     g = Guard(mode="enforce", receipts_path=rec)
-    print("\ndemo_cli V0 — reversibility + structural-approval demo")
+    print("\ndemo_cli V0 - reversibility + structural-approval demo")
     print(f"production DB: prod.db   (users rows: {_rows(db)})")
-    print("agent directive: 'CODE FREEZE — do not touch production.'\n")
+    print("agent directive: 'CODE FREEZE - do not touch production.'\n")
 
     r, _ = g.evaluate('psql staging -c "SELECT count(*) FROM users"', agent_id="coding-agent", session_id="demo")
     print(f"  .  [{r.decision:<10}] read on staging")

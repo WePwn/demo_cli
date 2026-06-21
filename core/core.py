@@ -1,9 +1,9 @@
 """
-demo_cli V0 — proof before permission. The action is the unit of trust.
+demo_cli V0 - proof before permission. The action is the unit of trust.
 
 Now led by the two differentiators the field lacks:
-  • REVERSIBILITY  — capture a recovery point before a destructive action, undo in one command.
-  • STRUCTURAL AUTH — the catastrophic, non-recoverable action needs an approval the agent can't forge.
+  • REVERSIBILITY  - capture a recovery point before a destructive action, undo in one command.
+  • STRUCTURAL AUTH - the catastrophic, non-recoverable action needs an approval the agent can't forge.
 The gate is table stakes; these two + the receipt ledger are the edge.
 """
 from __future__ import annotations
@@ -57,7 +57,7 @@ def decide(c: dict, recoverable: bool, approved: bool) -> tuple[str, str]:
     if not c["is_destructive"]:
         return ALLOW, "Non-destructive; outside the invariant."
     if recoverable:
-        return REVERSIBLE, "Destructive, but a recovery point was captured first — reversible."
+        return REVERSIBLE, "Destructive, but a recovery point was captured first - reversible."
     if c["environment"] == "dev":
         return ALLOW, "Destructive but non-production; low blast radius."
     if c["environment"] == "prod":

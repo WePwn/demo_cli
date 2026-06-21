@@ -26,7 +26,7 @@ def shadow_report(path="demo_cli_receipts.jsonl"):
     by = Counter(r["decision"] for r in rows)
     recovered = [r for r in rows if r.get("recovery_point")]
     caught = [r for r in rows if r["decision"] in ("BLOCK","ESCALATE")]
-    L = ["="*68, "demo_cli — decision report (would-have-caught AND could-have-recovered)", "="*68,
+    L = ["="*68, "demo_cli - decision report (would-have-caught AND could-have-recovered)", "="*68,
          f"actions observed : {len(rows)}",
          f"allowed          : {by.get('ALLOW',0)}",
          f"reversible       : {by.get('REVERSIBLE',0)}   (recovery points captured: {len(recovered)})",
@@ -34,11 +34,11 @@ def shadow_report(path="demo_cli_receipts.jsonl"):
          f"blocked          : {by.get('BLOCK',0)}",
          f"receipt chain    : {'INTACT' if verify_chain(rows) else 'TAMPERED'}", ""]
     if recovered:
-        L.append("RECOVERABLE — a recovery point was captured before the action ran:")
+        L.append("RECOVERABLE - a recovery point was captured before the action ran:")
         for r in recovered:
             L.append(f"   [{r['decision']}] {r['action_raw'][:60]}  ->  undo available")
     if caught:
-        L.append("CONTAINED — required structural approval or blocked:")
+        L.append("CONTAINED - required structural approval or blocked:")
         for r in caught:
             L.append(f"   [{r['decision']}] ({r['target_environment']}/{r['structural_approval']}) {r['action_raw'][:54]}")
     L.append("="*68)
