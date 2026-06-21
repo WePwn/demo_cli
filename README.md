@@ -27,12 +27,13 @@ The second point is new in v0.2. A command can be reasonable by itself but dange
 
 ## What is new in v0.2
 
+- Public demo page: [https://demo.wepwn.ma](https://demo.wepwn.ma)
 - One-command demo runner with `./start.sh`
-- Better colored CLI output
+- Better CLI output with clearer verdicts and colored sections
 - Context fingerprint before mutating actions
 - New `CONTEXT_MISMATCH` disposition
 - `--intent-env`, `--intent-branch`, `--intent-cwd`, `--intent-remote` and `--intent-scope` flags
-- Feedback issue link printed after important verdicts
+- One final feedback prompt at the end of the demo
 - `NO_COLOR=1` support for plain terminal output
 - `DEMO_FAST=1 ./start.sh` for faster local testing
 
