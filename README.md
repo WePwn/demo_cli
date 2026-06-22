@@ -23,7 +23,7 @@ It targets two specific links:
 1. **Before a destructive database command runs, capture a recovery point and show exactly what will be affected.**
 2. **Before a mutating action runs, compare the stated intent with the actual context.**
 
-The second point is new in v0.2. A command can be reasonable by itself but dangerous because it is pointed at the wrong environment.
+The second point is new in v0.3. A command can be reasonable by itself but dangerous because it is pointed at the wrong environment.
 
 ## What is new in v0.3
 
@@ -37,7 +37,7 @@ The second point is new in v0.2. A command can be reasonable by itself but dange
 - Connection-string passwords are redacted in all output and in the receipt log
 - The hook now prints the feedback link at the end of its output, matching the sample below
 
-## What is new in v0.2
+## What is new in v0.3
 
 - Public demo page: [https://demo.wepwn.ma](https://demo.wepwn.ma)
 - One-command demo runner with `./start.sh`
@@ -306,7 +306,7 @@ Most tools in this space focus on detecting and blocking dangerous commands. Tha
 
 This demo explores a different default. Instead of stopping the agent when something looks dangerous, capture a recovery point, show what will happen, and let the work finish when there is an undo path.
 
-v0.2 adds a second idea: if a mutating action looks valid but is pointed at the wrong context, snapshot first and make the mismatch visible.
+v0.3 adds a second idea: if a mutating action looks valid but is pointed at the wrong context, snapshot first and make the mismatch visible.
 
 ## Feedback
 
