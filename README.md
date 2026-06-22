@@ -1,6 +1,6 @@
-# demo_cli v0.2
+# demo_cli v0.3
 
-A small proof-of-concept: a pre-execution safety layer that sits in front of destructive or context-sensitive commands an AI coding agent might run against a real database.
+A small proof-of-concept: a pre-execution safety layer that sits in front of destructive or context-sensitive commands an AI coding agent might run against a real database or working tree.
 
 This is **a demo of a larger idea**, not a finished product. It exists to show one specific mechanism working end-to-end, on a real agent, against a real locally-generated, throwaway database.
 
@@ -24,6 +24,18 @@ It targets two specific links:
 2. **Before a mutating action runs, compare the stated intent with the actual context.**
 
 The second point is new in v0.2. A command can be reasonable by itself but dangerous because it is pointed at the wrong environment.
+
+## What is new in v0.3
+
+- `verify` command: walk the receipt chain end to end and report `INTACT` or `TAMPERED`, pointing at the first broken entry
+- `diff` command: after the action runs, show exactly what changed against the latest recovery point (row-level for SQLite, file-level for a directory, text diff for a single file)
+- Chained and piped commands are split and classified segment by segment, so a destructive step hidden after a safe one is still caught
+- Opaque remote execution (`curl ... | bash`, `wget ... | sh`, `base64 -d | sh`, `eval`) is treated as non-previewable and escalated, because the payload is unknown before it runs
+- `rm -fr` is now caught as well as `rm -rf` (flag order no longer matters)
+- Postgres targets via `--db-url`: recovery points captured with `pg_dump`, affected-row preview via `psql`, restore via `pg_restore` (best-effort; degrades safely when the client tools are not installed)
+- `--target path` opts any file or directory into recoverability, which covers formatters, generators and package managers that rewrite files indirectly
+- Connection-string passwords are redacted in all output and in the receipt log
+- The hook now prints the feedback link at the end of its output, matching the sample below
 
 ## What is new in v0.2
 
@@ -118,13 +130,32 @@ python demo_cli_hook.py \
 
 # One-command restore - brings the database back to the latest recovery point
 python demo_cli_hook.py undo
+
+# Show exactly what changed since the last recovery point
+python demo_cli_hook.py diff
+
+# Verify the receipt chain end to end
+python demo_cli_hook.py verify
+```
+
+### Step 3 - Optional: other target types
+
+```bash
+# Postgres target (needs pg_dump / psql / pg_restore on PATH)
+python demo_cli_hook.py "DELETE FROM users WHERE id < 5" \
+  --db-url postgres://user:pass@host:5432/dbname
+
+# A formatter / generator that rewrites files: snapshot the directory first,
+# then inspect the change with diff
+python demo_cli_hook.py "npx prettier --write ." --target src
+python demo_cli_hook.py diff --target src
 ```
 
 ## What you will see on DRY_RUN
 
 ```text
 ==============================================================
- demo_cli v0.2 [DRY_RUN]
+ demo_cli v0.3 [DRY_RUN]
 ==============================================================
  Action
    SQL               DELETE FROM users WHERE last_login < '2010-01-01'
@@ -143,6 +174,7 @@ python demo_cli_hook.py undo
  Recovery
    snapshot          production.db.20260621-184500.bak
    undo              python demo_cli_hook.py undo
+   diff              python demo_cli_hook.py diff
    Recovery point captured. This action can be undone.
 
  Feedback? Open an issue: https://github.com/WePwn/demo_cli/issues
@@ -205,21 +237,21 @@ The test database is at ./examples/production.db
 
 Please clean up the old inactive users created before 2010.
 
-Before running any command that touches the database, check it with:
-python demo_cli_hook.py "" --db examples/production.db
+Before running the destructive statement against the database, check it with demo_cli, passing the exact SQL you are about to run. For example:
+python demo_cli_hook.py "DELETE FROM users WHERE last_login < '2010-01-01'" --db examples/production.db
 
 Let it run completely.
 
 I want to see the hook capture a recovery point before the delete executes, show which rows will be affected, and confirm undo is available afterward.
 ```
 
-For the v0.2 context mismatch case, use this task:
+For the v0.3 context mismatch case, use this task:
 
 ```text
 I want to clean old inactive users in staging.
 
-Before running any command that mutates the database, check it with:
-python demo_cli_hook.py "" --db examples/production.db --intent-env staging --intent-scope "clean old inactive users in staging"
+Before running the statement that mutates the database, check it with demo_cli, passing the exact SQL and your declared intent. For example:
+python demo_cli_hook.py "UPDATE users SET is_active = 0 WHERE last_login < '2010-01-01'" --db examples/production.db --intent-env staging --intent-scope "clean old inactive users in staging"
 
 If the actual context does not match the intended context, I want the hook to capture a recovery point before anything continues.
 ```
@@ -233,11 +265,15 @@ The hook classifies every command and decides what happens next:
 | Disposition | When it fires | What happens |
 |---|---|---|
 | `ALLOW` | Non-mutating action, such as a safe read | Cleared immediately, no recovery point needed |
-| `DRY_RUN` | `DELETE`, `UPDATE` or `TRUNCATE` detected and preview is possible | Converts to a preview query first, shows affected rows, captures a snapshot, then the command may run |
+| `DRY_RUN` | `DELETE`, `UPDATE` or `TRUNCATE` detected and preview is possible (SQLite or Postgres) | Converts to a preview query first, shows affected rows, captures a snapshot, then the command may run |
 | `CONTEXT_MISMATCH` | A mutating action does not match declared intent, such as `--intent-env staging` against a production target | Captures a recovery point when possible and explains the mismatch before continuing |
-| `REVERSIBLE` | Other destructive or mutating action with a known file target | Snapshot captured before the action runs, undo available after |
+| `REVERSIBLE` | Other mutating action with a known file, directory or database target (including formatters via `--target`) | Snapshot captured before the action runs, undo and diff available after |
 | `SANDBOX` | Destructive action on a non-production target | Low blast radius, proceeds |
-| `ESCALATE` | Non-recoverable, no snapshot path available | Stops and tells the agent exactly what is needed to proceed safely |
+| `ESCALATE` | Non-recoverable, no snapshot path, or opaque remote execution (`curl \| bash`) | Stops and tells the agent exactly what is needed to proceed safely |
+
+Chained and piped commands (`a && b`, `a \| b`, `a ; b`) are split into segments and each segment is classified. The pipeline inherits the strongest signal, and the output lists every segment so a destructive step hidden after a safe one is still visible.
+
+After the action runs, `python demo_cli_hook.py diff` shows exactly what changed against the latest recovery point, and `python demo_cli_hook.py verify` walks the receipt chain and reports whether it is intact.
 
 Every decision is written to a tamper-evident, hash-chained log: `demo_cli_receipts.jsonl`.
 
@@ -258,8 +294,8 @@ What it does is make destructive and context-sensitive commands recoverable and 
 - It does not cover every destructive action class.
 - It currently understands SQL mutations, common infra commands and a few shell/git patterns.
 - It will not catch everything.
-- It currently snapshots SQLite files.
-- Postgres/MySQL support is the natural next step.
+- It currently snapshots SQLite files, directories and single files, and Postgres via `pg_dump` when the client tools are present.
+- Wider Postgres/MySQL coverage and richer diffs are the natural next step.
 - It is not a replacement for scoped credentials, environment separation or real backups. Those still matter.
 
 This sits one layer deeper: assuming any of those can fail, can the action still be made recoverable?
