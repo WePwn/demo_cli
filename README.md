@@ -1,317 +1,268 @@
-# demo_cli v0.3
+# demo_cli
 
-A small proof-of-concept: a pre-execution safety layer that sits in front of destructive or context-sensitive commands an AI coding agent might run against a real database or working tree.
+A pre-execution safety layer for AI coding agents.
 
-This is **a demo of a larger idea**, not a finished product. It exists to show one specific mechanism working end-to-end, on a real agent, against a real locally-generated, throwaway database.
+Before a destructive command runs, demo_cli **previews** what it would do,
+**snapshots** the real target so it can be **undone**, and writes a
+**tamper-evident receipt** of every decision, including the agent's stated
+reasoning.
 
-## What this demo shows
+Built around one invariant:
 
-A few weeks ago, an AI coding agent deleted a production database in 9 seconds while fixing an unrelated staging issue. It found an over-scoped credential, ran a destructive call against the wrong environment, and there was no recovery point. The backup that existed was months old and lived in the same blast radius as the data it was meant to protect.
+> A mutating action must be recoverable **and** match its declared context
+> otherwise it is escalated, never silently allowed, and never falsely reported
+> as "recovered".
 
-That kind of incident is rarely one failure. It is usually a chain:
+`0.4.0b3` - public beta. Cooperative-agent threat model (mistakes, not evasion).
 
-- an over-broad credential
-- a missing environment boundary
-- a destructive call with no preview
-- no recovery point captured before the action ran
-- no record of what actually happened
+---
 
-This demo does not try to fix every link in that chain.
+## Why this is not just another blocking hook
 
-It targets two specific links:
+Most safety hooks for AI agents do one thing: pattern-match a dangerous command
+and **block** it. That stops the obvious disasters, but it also stops the agent
+mid-task, so you either loosen the rules until they stop catching things, or
+you babysit the session.
 
-1. **Before a destructive database command runs, capture a recovery point and show exactly what will be affected.**
-2. **Before a mutating action runs, compare the stated intent with the actual context.**
+demo_cli starts from the opposite default: **recovery, not blocking.**
 
-The second point is new in v0.3. A command can be reasonable by itself but dangerous because it is pointed at the wrong environment.
+- For anything it can prove it captured (a file, a directory, a local DB), it
+  **snapshots first and lets the agent keep working.** If the agent gets it
+  wrong, `demo_cli undo <id>` brings it back. The work finishes; the mistake is
+  reversible.
+- It only **blocks** when something genuinely *can't* be recovered, an external
+  or irreversible effect (`terraform destroy`, `git push --force`, an object-store
+  delete). There, it escalates honestly instead of pretending it captured a
+  recovery point.
 
-## What is new in v0.3
+Blocking is the fallback for the un-recoverable, not the default for everything.
+That's the whole design.
 
-- `verify` command: walk the receipt chain end to end and report `INTACT` or `TAMPERED`, pointing at the first broken entry
-- `diff` command: after the action runs, show exactly what changed against the latest recovery point (row-level for SQLite, file-level for a directory, text diff for a single file)
-- Chained and piped commands are split and classified segment by segment, so a destructive step hidden after a safe one is still caught
-- Opaque remote execution (`curl ... | bash`, `wget ... | sh`, `base64 -d | sh`, `eval`) is treated as non-previewable and escalated, because the payload is unknown before it runs
-- `rm -fr` is now caught as well as `rm -rf` (flag order no longer matters)
-- Postgres targets via `--db-url`: recovery points captured with `pg_dump`, affected-row preview via `psql`, restore via `pg_restore` (best-effort; degrades safely when the client tools are not installed)
-- `--target path` opts any file or directory into recoverability, which covers formatters, generators and package managers that rewrite files indirectly
-- Connection-string passwords are redacted in all output and in the receipt log
-- The hook now prints the feedback link at the end of its output, matching the sample below
+---
 
-## What is new in v0.3
+## How it works with Claude Code
 
-- Public demo page: [https://demo.wepwn.ma](https://demo.wepwn.ma)
-- One-command demo runner with `./start.sh`
-- Better CLI output with clearer verdicts and colored sections
-- Context fingerprint before mutating actions
-- New `CONTEXT_MISMATCH` disposition
-- `--intent-env`, `--intent-branch`, `--intent-cwd`, `--intent-remote` and `--intent-scope` flags
-- One final feedback prompt at the end of the demo
-- `NO_COLOR=1` support for plain terminal output
-- `DEMO_FAST=1 ./start.sh` for faster local testing
+Claude Code supports [PreToolUse hooks](https://docs.claude.com/en/docs/claude-code/hooks):
+a shell command that runs **before each tool call**, receives the full tool input
+as JSON on stdin, and returns a permission decision. demo_cli is that command.
 
-## Requirements
-
-- Python 3.8 or higher
-- Bash for `start.sh`
-- No external Python dependencies
-- No `pip install` needed
-
-## Repository structure
-
-```text
-demo_cli/
-├── demo_cli_hook.py              # the hook, the main file, drop it into any project
-├── start.sh                      # one-command guided demo
-├── README.md
-├── requirements.txt
-├── examples/
-│   └── create_production_db.py   # generates a throwaway test database
-└── core/                         # supporting modules
-    ├── approval.py
-    ├── cli.py
-    ├── core.py
-    ├── reversibility.py
-    └── ...
+```
+Claude Code is about to run: Bash(rm -rf dist/)
+                              ↓
+              demo_cli hook  (fires automatically)
+                              ↓
+         classify → resolve target → snapshot → decide
+                              ↓
+        { "permissionDecision": "allow" }   ← allow, with a recovery point
+        { "permissionDecision": "deny"  }   ← blocked, reason surfaced to agent
+        { "permissionDecision": "ask"   }   ← paused, human decides
 ```
 
-## Fast demo
+**One property worth knowing:** a PreToolUse hook returning `deny` stops the tool
+**even when the session is running `--dangerously-skip-permissions` or
+`bypassPermissions`**, that mode skips the interactive prompts, not the hooks.
+So the recovery-and-escalation layer holds even in a fully autonomous run. (The
+one way it does *not* fire: if the `demo_cli` binary isn't on PATH in the shell
+where `claude` launched, Claude Code silently proceeds with no check, see
+[Known issues](#known-issues-beta). Run `demo_cli doctor` to confirm.)
 
-After cloning the repo, run:
+demo_cli gates **both** tool categories Claude Code uses to modify your project:
+- `Bash` - shell commands (`rm`, `git reset --hard`, `terraform destroy`, …)
+- `Edit` / `Write` / `MultiEdit` / `NotebookEdit` - direct file mutations
+
+A file or directory is snapshotted **before** it is touched. If the agent
+destroys something, `demo_cli undo <id>` brings it back.
+
+---
+
+## Install
+
+**With pipx (recommended)**, puts `demo_cli` in your global PATH so Claude
+Code can find it from any project directory:
 
 ```bash
-git clone https://github.com/WePwn/demo_cli
+pipx install git+https://github.com/WePwn/demo_cli.git@beta
+demo_cli --version
+```
+
+**From a clone:**
+
+```bash
+git clone -b beta https://github.com/WePwn/demo_cli.git
 cd demo_cli
-chmod +x start.sh
-./start.sh
+pipx install -e .
+demo_cli --version
 ```
 
-The script creates the local throwaway database, runs a safe read, previews a destructive cleanup, captures recovery points, demonstrates a context mismatch case and restores from the latest snapshot.
+> **Note:** if you install inside a virtualenv, that venv must be active in
+> every shell where you launch `claude`. Otherwise the `demo_cli hook` command
+> is not found and Claude Code silently proceeds without a safety check. Use
+> `demo_cli doctor` to verify the install.
 
-For a faster version while testing locally:
+Requires Python 3.9+.
+
+---
+
+## Quickstart
 
 ```bash
-DEMO_FAST=1 ./start.sh
+# inside your project
+demo_cli init            # write .demo_cli.toml (shadow mode by default)
+demo_cli install-hook    # register the PreToolUse hook in .claude/settings.json
+demo_cli status          # confirm: hook installed, mode shadow, 0 receipts
 ```
 
-For output without colors:
+Now launch Claude Code and ask it to do something destructive. demo_cli fires
+automatically, no extra commands needed. Afterwards:
 
 ```bash
-NO_COLOR=1 ./start.sh
+demo_cli log             # see every recovery point: id, when, kind, size, action
+demo_cli diff <id>       # what exactly changed
+demo_cli undo <id>       # restore to the state before that action
+demo_cli verify          # confirm the receipt log was not tampered with
 ```
 
-## Manual demo
-
-### Step 1 - Clone and generate the test database
+To evaluate a command manually (useful for testing or CI):
 
 ```bash
-git clone https://github.com/WePwn/demo_cli
-cd demo_cli/examples
-python create_production_db.py
-cd ..
+demo_cli check "DELETE FROM users WHERE plan = 'free'" --db app.db
+demo_cli check "rm -rf dist/" --quiet
+demo_cli check "terraform destroy" --actual-env production --json
 ```
 
-This creates `examples/production.db`, a fake e-commerce database with 12 users, 10 products, 9 orders and 14 order items. Two of the users are old inactive accounts from 2008-2009.
+---
 
-### Step 2 - Test the hook directly from the project root
+## Modes
 
-```bash
-# Safe read - ALLOW, no recovery point needed
-python demo_cli_hook.py "SELECT * FROM users" --db examples/production.db
+**shadow** (default), observe, snapshot, and record, but never block. The
+recommended way to start: prove the value with zero workflow disruption. In
+shadow mode the hook writes to stderr when it captures a snapshot or sees a
+blocking decision, so the value is visible without affecting Claude Code's flow.
 
-# Destructive write - DRY_RUN: previews affected rows, snapshots, then allows
-python demo_cli_hook.py "DELETE FROM users WHERE last_login < '2010-01-01'" --db examples/production.db
+**enforce** - the hook actively gates tool calls:
 
-# Valid command, wrong context - CONTEXT_MISMATCH: snapshot first
-python demo_cli_hook.py \
-  "UPDATE users SET is_active = 0 WHERE last_login < '2010-01-01'" \
-  --db examples/production.db \
-  --intent-env staging \
-  --intent-scope "clean old inactive users in staging"
-
-# One-command restore - brings the database back to the latest recovery point
-python demo_cli_hook.py undo
-
-# Show exactly what changed since the last recovery point
-python demo_cli_hook.py diff
-
-# Verify the receipt chain end to end
-python demo_cli_hook.py verify
-```
-
-### Step 3 - Optional: other target types
-
-```bash
-# Postgres target (needs pg_dump / psql / pg_restore on PATH)
-python demo_cli_hook.py "DELETE FROM users WHERE id < 5" \
-  --db-url postgres://user:pass@host:5432/dbname
-
-# A formatter / generator that rewrites files: snapshot the directory first,
-# then inspect the change with diff
-python demo_cli_hook.py "npx prettier --write ." --target src
-python demo_cli_hook.py diff --target src
-```
-
-## What you will see on DRY_RUN
-
-```text
-==============================================================
- demo_cli v0.3 [DRY_RUN]
-==============================================================
- Action
-   SQL               DELETE FROM users WHERE last_login < '2010-01-01'
-   type              mutating SQL with preview
-   rows affected     1
-
- Context fingerprint
-   environment       production
-   database          /path/to/demo_cli/examples/production.db
-   fingerprint       7c4c8b19a1d55b8e
-
- Preview
-   columns           id | username | email | password_hash | role | created_at | last_login | is_active
-   12 | old_user_2 | old2@example.com | hash_old2 | user | 2008-06-15 | 2009-08-20 | 0
-
- Recovery
-   snapshot          production.db.20260621-184500.bak
-   undo              python demo_cli_hook.py undo
-   diff              python demo_cli_hook.py diff
-   Recovery point captured. This action can be undone.
-
- Feedback? Open an issue: https://github.com/WePwn/demo_cli/issues
-==============================================================
-```
-
-## Context mismatch demo
-
-The first version of the hook focused on commands that are obviously destructive, such as `DELETE`, `DROP` and `TRUNCATE`.
-
-That is useful, but it is not enough.
-
-A command can be reasonable by itself but dangerous because it is pointed at the wrong context. For example, cleaning stale users in staging is reasonable. Running the same mutation against production is a context mismatch.
-
-The hook now compares the declared intent against a local context fingerprint before mutating actions.
-
-The fingerprint includes:
-
-- current working directory
-- git repo root
-- git branch
-- git remote
-- database path
-- detected environment
-- AWS profile if present
-- GCloud project if present
-- Azure subscription if present
-
-Example:
-
-```bash
-python demo_cli_hook.py \
-  "UPDATE users SET is_active = 0 WHERE last_login < '2010-01-01'" \
-  --db examples/production.db \
-  --intent-env staging \
-  --intent-scope "clean old inactive users in staging"
-```
-
-Because the intended environment is `staging` but the target database is detected as `production`, the hook emits `CONTEXT_MISMATCH` and captures a snapshot before continuing.
-
-## Test with a real AI agent
-
-From the project root:
-
-```bash
-claude --dangerously-skip-permissions
-```
-
-Then give Claude Code this task:
-
-```text
-I built a pre-execution safety tool called demo_cli_hook.py that snapshots destructive database commands before they run so they can be undone.
-
-I want to verify it works.
-
-I have an independent backup and I'm explicitly authorizing this test as the developer who owns this project.
-
-The tool is at ./demo_cli_hook.py
-The test database is at ./examples/production.db
-
-Please clean up the old inactive users created before 2010.
-
-Before running the destructive statement against the database, check it with demo_cli, passing the exact SQL you are about to run. For example:
-python demo_cli_hook.py "DELETE FROM users WHERE last_login < '2010-01-01'" --db examples/production.db
-
-Let it run completely.
-
-I want to see the hook capture a recovery point before the delete executes, show which rows will be affected, and confirm undo is available afterward.
-```
-
-For the v0.3 context mismatch case, use this task:
-
-```text
-I want to clean old inactive users in staging.
-
-Before running the statement that mutates the database, check it with demo_cli, passing the exact SQL and your declared intent. For example:
-python demo_cli_hook.py "UPDATE users SET is_active = 0 WHERE last_login < '2010-01-01'" --db examples/production.db --intent-env staging --intent-scope "clean old inactive users in staging"
-
-If the actual context does not match the intended context, I want the hook to capture a recovery point before anything continues.
-```
-
-## How it works
-
-`demo_cli_hook.py` is a single Python file with no external dependencies.
-
-The hook classifies every command and decides what happens next:
-
-| Disposition | When it fires | What happens |
+| Disposition | Hook response | When |
 |---|---|---|
-| `ALLOW` | Non-mutating action, such as a safe read | Cleared immediately, no recovery point needed |
-| `DRY_RUN` | `DELETE`, `UPDATE` or `TRUNCATE` detected and preview is possible (SQLite or Postgres) | Converts to a preview query first, shows affected rows, captures a snapshot, then the command may run |
-| `CONTEXT_MISMATCH` | A mutating action does not match declared intent, such as `--intent-env staging` against a production target | Captures a recovery point when possible and explains the mismatch before continuing |
-| `REVERSIBLE` | Other mutating action with a known file, directory or database target (including formatters via `--target`) | Snapshot captured before the action runs, undo and diff available after |
-| `SANDBOX` | Destructive action on a non-production target | Low blast radius, proceeds |
-| `ESCALATE` | Non-recoverable, no snapshot path, or opaque remote execution (`curl \| bash`) | Stops and tells the agent exactly what is needed to proceed safely |
+| `ESCALATE` | `deny` | non-recoverable blast radius (infra destroy, force push, …) |
+| `CONTEXT_MISMATCH` | `ask` | declared env does not match the resolved env |
+| `REVERSIBLE` / `DRY_RUN` | `allow` | snapshotted first, recoverable |
+| `ALLOW` | `allow` | non-mutating, no action needed |
 
-Chained and piped commands (`a && b`, `a \| b`, `a ; b`) are split into segments and each segment is classified. The pipeline inherits the strongest signal, and the output lists every segment so a destructive step hidden after a safe one is still visible.
+Switch mode in `.demo_cli.toml` or per call:
 
-After the action runs, `python demo_cli_hook.py diff` shows exactly what changed against the latest recovery point, and `python demo_cli_hook.py verify` walks the receipt chain and reports whether it is intact.
+```bash
+demo_cli check "rm -rf dist" --mode enforce
+```
 
-Every decision is written to a tamper-evident, hash-chained log: `demo_cli_receipts.jsonl`.
+Start in shadow. Move to enforce on a project once you trust what it's doing.
 
-Editing a past entry breaks the chain, so the record of what happened and why is auditable after the fact.
+---
 
-## Important
+## Configuration
 
-This tool does not replace human authorization.
+Run `demo_cli init` to scaffold `.demo_cli.toml` at the project root.
 
-It does not decide whether a destructive command *should* run. That decision belongs to the person who owns the system.
+```toml
+mode = "shadow"
 
-What it does is make destructive and context-sensitive commands recoverable and auditable, so a mistake by an agent or a person does not have to be catastrophic.
+[workspace]
+dir = ".demo_cli"          # receipts + recovery points (gitignored)
 
-## What this demo is not
+[approval]
+key_env = "DEMO_CLI_APPROVER_KEY"
 
-- It is not a finished product.
-- It is a working proof of one mechanism: snapshot-before, preview-first, undo-after.
-- It does not cover every destructive action class.
-- It currently understands SQL mutations, common infra commands and a few shell/git patterns.
-- It will not catch everything.
-- It currently snapshots SQLite files, directories and single files, and Postgres via `pg_dump` when the client tools are present.
-- Wider Postgres/MySQL coverage and richer diffs are the natural next step.
-- It is not a replacement for scoped credentials, environment separation or real backups. Those still matter.
+[[target]]
+match = "production"       # substring matched against the resolved target ref
+env = "production"
+recovery = "snapshot"      # snapshot | none
+```
 
-This sits one layer deeper: assuming any of those can fail, can the action still be made recoverable?
+Environment is resolved in priority order: an explicit `--actual-env` flag,
+then a `[[target]]` match in this file, then a heuristic over the command text.
+A production database is reached via a connection string, not by a file called
+`prod.db`, the declared target is always the source of truth.
 
-## Why this exists
+---
 
-Most tools in this space focus on detecting and blocking dangerous commands. That is necessary, but blocking alone has a known failure mode: agents get stopped mid-task, developers get frustrated, and the tool gets uninstalled.
+## Command reference
 
-This demo explores a different default. Instead of stopping the agent when something looks dangerous, capture a recovery point, show what will happen, and let the work finish when there is an undo path.
+| Command | What it does |
+|---|---|
+| `check "<cmd>"` | evaluate a command; flags: `--db`, `--db-url`, `--target`, `--mode`, `--intent-env`, `--actual-env`, `--reason`, `--approval-token`, `--json`, `--quiet` |
+| `log` | list captured recovery points (id, when, kind, size, action) |
+| `undo [id]` | restore a recovery point by id, or the latest |
+| `diff [id]` | show what changed since a recovery point |
+| `verify` | walk the receipt hash-chain → INTACT or TAMPERED |
+| `report` | summarise recorded decisions |
+| `status` | mode, hook state, receipts, chain integrity, recovery count |
+| `doctor` | check python version, config, pg tools, hook registration, PATH |
+| `prune` | delete old recovery artefacts (`--keep N`, `--older-than DAYS`); receipts are never pruned |
+| `init` | scaffold `.demo_cli.toml` |
+| `install-hook` | write PreToolUse entries into `.claude/settings.json` |
+| `hook` | (internal) called by Claude Code; reads tool JSON on stdin, writes permission decision on stdout |
 
-v0.3 adds a second idea: if a mutating action looks valid but is pointed at the wrong context, snapshot first and make the mismatch visible.
+Exit codes for `check`: `0` allow, `1` context mismatch, `2` escalate.
 
-## Feedback
+---
 
-This is an early, rough demo shared for feedback, not a pitch.
+## What it covers, and what it does not
 
-If you have hit something like this yourself, or you can see where this breaks, that is exactly the kind of response that is useful right now.
+**Snapshot targets:** sqlite files, postgres (via `pg_dump`/`pg_restore`),
+individual files, directories (capped at `DEMO_CLI_MAX_SNAPSHOT_MB`, default 256 MB).
 
-Feedback? Open an issue: https://github.com/WePwn/demo_cli/issues
+**Escalated honestly, never falsely snapshotted:** terraform/kubectl/cloud
+destroy commands, `git push --force`, remote filesystem changes, object-storage
+deletions, external side effects (email, payments, webhooks), credential rotation,
+and any database reached over a non-local connection string. demo_cli will not
+claim a recovery it cannot provide.
+
+**Out of scope for this beta:**
+- Adversarial agents deliberately evading classification
+- Reversing already-sent external effects
+- Multi-agent concurrent sessions (receipt locking is POSIX; Windows degrades to best-effort)
+- Adapters for agents other than Claude Code (Cursor, Aider, Cline, planned)
+
+---
+
+## Known issues (beta)
+
+- **PATH:** `demo_cli` must be resolvable in the shell where `claude` runs.
+  Install with `pipx`, or keep the virtualenv active. Run `demo_cli doctor`
+  to check. If the binary is not found, Claude Code silently skips the hook.
+- **Single-path `rm`:** `rm a.py b.py` (multiple targets) escalates rather than
+  partially snapshotting one file. This is intentional - partial recovery is
+  not honest recovery.
+- **`mv` is conservative:** most two-argument `mv` commands are flagged. Safe
+  renames inside the project workspace will be narrowed in a future release.
+
+---
+
+## Library use
+
+```python
+from demo_cli import Guard
+
+result = Guard(mode="enforce").evaluate("DELETE FROM users", explicit_db="app.db")
+print(result.decision.decision)   # REVERSIBLE
+print(result.permission)          # allow
+```
+
+---
+
+## Tests
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+# 63 tests, passing on Python 3.9 – 3.14
+```
+
+---
+
+## Contributing
+
+This is a public beta. The most useful reports are **real commands from real
+agent sessions** that produced a wrong decision (false block or missed snapshot).
+Open an issue with the command, your `.demo_cli.toml` (redact credentials), and
+what you expected. Bug reports found through dogfooding, like the `rm app.db`
+case that shaped 0.4.0b3, are exactly what the project needs right now.

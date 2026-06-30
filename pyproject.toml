@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demo_cli"
+dynamic = ["version"]
+description = "A pre-execution safety layer for AI coding agents: preview, snapshot, undo, and a tamper-evident receipt of every decision."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "WePwn" }]
+keywords = ["ai-agents", "safety", "guardrails", "claude-code", "recovery", "audit"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/WePwn/demo_cli"
+Issues = "https://github.com/WePwn/demo_cli/issues"
+
+[project.scripts]
+demo_cli = "demo_cli.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "demo_cli.version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

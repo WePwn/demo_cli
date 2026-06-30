@@ -1,6 +1,0 @@
-# demo_cli has no third-party dependencies.
-# It uses only Python standard library modules:
-#   sys, os, re, json, sqlite3, shutil, hashlib, uuid, datetime
-#
-# Requirements: Python 3.8 or higher.
-# No pip install needed.
