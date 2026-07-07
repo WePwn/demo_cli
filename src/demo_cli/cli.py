@@ -252,6 +252,18 @@ def cmd_init(a) -> int:
 
 
 def cmd_install_hook(a) -> int:
+    if getattr(a, "cursor", False):
+        from .hooks.cursor import settings_snippet, install_into_hooks_json
+        snippet = settings_snippet()
+        if a.print:
+            print(json.dumps(snippet, indent=2))
+            return 0
+        target = (os.path.expanduser("~/.cursor/hooks.json") if a.scope == "global"
+                  else os.path.join(os.getcwd(), ".cursor", "hooks.json"))
+        install_into_hooks_json(target)
+        print(f"Installed beforeShellExecution hook into {target}")
+        print("demo_cli will now fire before each Cursor shell command (failClosed: true).")
+        return 0
     from .hooks.claude_code import settings_snippet, install_into_settings
     snippet = settings_snippet()
     if a.print:
@@ -268,6 +280,11 @@ def cmd_install_hook(a) -> int:
 def cmd_hook(a) -> int:
     from .hooks.claude_code import run_pretooluse
     return run_pretooluse(sys.stdin, sys.stdout)
+
+
+def cmd_hook_cursor(a) -> int:
+    from .hooks.cursor import run_before_shell
+    return run_before_shell(sys.stdin, sys.stdout)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -334,13 +351,20 @@ def build_parser() -> argparse.ArgumentParser:
     it.add_argument("--force", action="store_true")
     it.set_defaults(func=cmd_init)
 
-    ih = sub.add_parser("install-hook", parents=[common], help="wire the PreToolUse hook into Claude Code")
+    ih = sub.add_parser("install-hook", parents=[common], help="wire the safety hook into Claude Code or Cursor")
+    ih.add_argument("--cursor", action="store_true",
+                    help="install the Cursor beforeShellExecution hook (into .cursor/hooks.json) "
+                         "instead of the Claude Code PreToolUse hook")
     ih.add_argument("--scope", choices=("project", "global"), default="project")
     ih.add_argument("--print", action="store_true", help="print the settings snippet instead of writing")
     ih.set_defaults(func=cmd_install_hook)
 
-    hk = sub.add_parser("hook", parents=[common], help="(internal) PreToolUse entrypoint; reads JSON on stdin")
+    hk = sub.add_parser("hook", parents=[common], help="(internal) Claude Code PreToolUse entrypoint; reads JSON on stdin")
     hk.set_defaults(func=cmd_hook)
+
+    hc = sub.add_parser("hook-cursor", parents=[common],
+                        help="(internal) Cursor beforeShellExecution entrypoint; reads JSON on stdin")
+    hc.set_defaults(func=cmd_hook_cursor)
 
     return p
 

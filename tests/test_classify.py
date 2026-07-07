@@ -47,3 +47,51 @@ def test_nonrecoverable_surface_detected():
 def test_schema_migration_is_nonrecoverable():
     c = classify_pipeline("alembic upgrade head")
     assert c.nonrecoverable_surface == "schema_migration"
+
+
+def test_remove_item_recurse_force_is_nonrecoverable():
+    c = classify_pipeline("Remove-Item -Recurse -Force ./build")
+    assert c.is_destructive and c.matched_rule == "ps_remove_item_rf"
+    assert c.nonrecoverable_surface == "recursive_force_delete"
+
+
+def test_remove_item_flag_order_alias_and_abbreviations():
+    for cmd in [
+        "Remove-Item -Force -Recurse ./build",   # reversed order
+        "Remove-Item -r -fo build",              # abbreviated flags
+        "ri -Recurse -Force ./x",                # alias
+        "REMOVE-ITEM -RECURSE -FORCE .",         # case
+    ]:
+        c = classify_pipeline(cmd)
+        assert c.is_destructive, cmd
+        assert c.nonrecoverable_surface == "recursive_force_delete", cmd
+
+
+def test_remove_item_requires_both_recurse_and_force():
+    # Force-only or recurse-only is not the recursive-force nuke; the lone
+    # "-Force" token must not satisfy the recurse lookahead despite its "r".
+    assert classify_pipeline("Remove-Item -Force ./x").matched_rule != "ps_remove_item_rf"
+    assert classify_pipeline("Remove-Item -Recurse ./x").matched_rule != "ps_remove_item_rf"
+
+
+def test_rmdir_and_del_are_now_nonrecoverable():
+    # del /s /q was already caught by del_force; the change is that both it and
+    # rmdir /s now carry the recursive_force_delete surface (hard-stop).
+    for cmd in ["rmdir /s /q build", "del /s /q build"]:
+        c = classify_pipeline(cmd)
+        assert c.is_destructive, cmd
+        assert c.nonrecoverable_surface == "recursive_force_delete", cmd
+
+
+def test_remove_item_hidden_in_pipeline():
+    c = classify_pipeline("echo cleaning && Remove-Item -Recurse -Force ./dist")
+    assert c.is_pipeline and c.is_destructive
+    assert c.nonrecoverable_surface == "recursive_force_delete"
+
+
+def test_unix_rm_rf_unaffected_by_powershell_rule():
+    # rm -rf keeps its recoverable philosophy (operand extractor + snapshot);
+    # it must NOT be swept into the hard-stop surface.
+    c = classify_pipeline("rm -rf ./build")
+    assert c.matched_rule == "rm_rf"
+    assert c.nonrecoverable_surface is None

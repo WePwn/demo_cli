@@ -71,3 +71,29 @@ def test_context_mismatch_without_recovery_escalates():
     d = decide(_c("DELETE FROM users"), "production", recovery_captured=False,
                mismatches=[("environment", "staging", "production")])
     assert d.decision == ESCALATE
+
+
+def test_remove_item_hard_stops_in_every_env():
+    # Truth-repair: publicly stated as blocked, so it must ESCALATE everywhere,
+    # not slip through the low-blast SANDBOX path in a dev/staging environment.
+    c = _c("Remove-Item -Recurse -Force ./build")
+    for env in ("production", "development", "staging", "unknown"):
+        d = decide(c, env, recovery_captured=False)
+        assert d.decision == ESCALATE, env
+        assert d.surface == "recursive_force_delete"
+
+
+def test_rmdir_and_del_hard_stop_in_dev_too():
+    # Regression of the old SANDBOX escape: these used to be waved through in a
+    # low-blast environment. They are now hard-stops in every environment.
+    for cmd in ("rmdir /s /q build", "del /s /q build"):
+        d = decide(_c(cmd), "development", recovery_captured=False)
+        assert d.decision == ESCALATE, cmd
+
+
+def test_recursive_force_delete_overridable_by_structural_approval():
+    # A human-signed approval token is still the legitimate escape; the agent
+    # cannot forge it. Consistent with the other non-recoverable surfaces.
+    c = _c("Remove-Item -Recurse -Force ./build")
+    d = decide(c, "production", recovery_captured=False, approval_ok=True)
+    assert d.decision == ALLOW

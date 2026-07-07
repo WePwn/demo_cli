@@ -43,6 +43,18 @@ _DESTRUCTIVE_RULES = [
     # `git rm`, `docker rm`, `npm rm` do NOT match - those are not local-file
     # deletions and would only produce false escalations.
     ("rm_local", "shell", r"^\s*(?:sudo\s+)?rm\b[^|;&]*"),
+    # PowerShell recursive-force delete: Remove-Item (alias `ri`) carrying BOTH a
+    # Recurse-like flag and a Force-like flag, in any order, full or abbreviated
+    # (-Recurse/-rec/-r and -Force/-fo/-f). The two lookaheads disambiguate
+    # cleanly by requiring the recurse token to start "-r" and the force token to
+    # start "-f", so a lone `-Force` (which contains an "r") does NOT satisfy the
+    # recurse lookahead - only the real `-Recurse -Force` nuke matches. Placed
+    # before rmdir/del so this higher-signal id wins. Escalated unconditionally
+    # (see _LOCAL_UNRECOVERABLE): -Force deletes a whole tree with no recycle bin
+    # and the operand extractor does not resolve its target, so there is no honest
+    # local recovery point to stand behind.
+    ("ps_remove_item_rf", "shell",
+     r"\b(?:Remove-Item|ri)\b(?=[^|;&]*\s-r[a-z]*\b)(?=[^|;&]*\s-f[a-z]*\b)[^|;&]*"),
     ("rmdir_s", "shell", r"\brmdir\b.*\/[sS]"),
     ("del_force", "shell", r"\bdel\b.*\/[fFsS]"),
     ("mv_overwrite", "shell", r"\bmv\s+(?:-[a-z]*f[a-z]*\s+)?\S+\s+\S+"),
@@ -73,6 +85,22 @@ _EXTERNAL_IRREVERSIBLE = {
     "railway_drop": "remote_database",
     "railway_vol_del": "remote_volume",
     "git_force_push": "remote_vcs_history",
+}
+
+# Local destructive commands this tool cannot honestly make reversible as built.
+# A recursive-force delete (Remove-Item -Recurse -Force, rmdir /s, del /s|/f)
+# removes a whole tree with no recycle bin, and the operand extractor does not
+# resolve its target, so no recovery point is ever captured. Left as ordinary
+# local deletes they would slip through the low-blast SANDBOX path in a
+# dev/test/staging environment - exactly where an agent runs. Marking them as a
+# non-recoverable surface makes the decision engine escalate them in EVERY
+# environment: a real hard-stop, matching what we state publicly. A human
+# structural-approval token remains the one legitimate override (an agent cannot
+# forge it), consistent with the external non-recoverable surfaces above.
+_LOCAL_UNRECOVERABLE = {
+    "ps_remove_item_rf": "recursive_force_delete",
+    "rmdir_s": "recursive_force_delete",
+    "del_force": "recursive_force_delete",
 }
 
 # Opaque remote execution: code is fetched and run in one step. It cannot be
@@ -222,6 +250,10 @@ def _classify_segment(cmd: str) -> dict:
     # External/remote destructive rules cannot be covered by a local snapshot.
     if surface is None and matched in _EXTERNAL_IRREVERSIBLE:
         surface = _EXTERNAL_IRREVERSIBLE[matched]
+    # Local recursive-force deletes we cannot honestly recover: escalate in every
+    # environment rather than let the SANDBOX path wave them through in dev.
+    if surface is None and matched in _LOCAL_UNRECOVERABLE:
+        surface = _LOCAL_UNRECOVERABLE[matched]
 
     is_mutating = is_destructive or is_sql_mutating or is_file_writer or (surface is not None)
 

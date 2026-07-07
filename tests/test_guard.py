@@ -37,6 +37,17 @@ def test_guard_snapshots_named_db_and_is_reversible(tmp_path):
     assert r.allowed is True
 
 
+def test_guard_remove_item_denies_end_to_end(tmp_path):
+    # The public claim, exercised the way a tester would: Remove-Item -Recurse
+    # -Force is denied, and in a low-blast dev workspace too.
+    (tmp_path / "build").mkdir()
+    g = Guard(config=_cfg(tmp_path))
+    r = g.evaluate("Remove-Item -Recurse -Force ./build", actual_env="development")
+    assert r.decision.decision == ESCALATE
+    assert r.permission == "deny"
+    assert r.allowed is False
+
+
 def test_shadow_mode_never_blocks(tmp_path):
     g = Guard(config=_cfg(tmp_path, mode="shadow"))
     r = g.evaluate("rm -rf /srv/data")  # would escalate in enforce

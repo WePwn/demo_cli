@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.0b4 - recursive-force hard-stop + Cursor adapter
+
+Two builds shipped together.
+
+### Recursive-force delete is a hard-stop in every environment
+`Remove-Item -Recurse -Force` slipped through entirely (classified
+non-mutating, allowed), and `rmdir /s` / `del /s` were waved through by the
+low-blast SANDBOX path in a dev/staging workspace - the exact place an agent
+runs. Both gaps are closed to match what is stated publicly.
+
+`classify.py`: new `ps_remove_item_rf` rule matches `Remove-Item` (alias `ri`)
+carrying both a Recurse-like and a Force-like flag, in any order, full or
+abbreviated (`-r`/`-fo`); two disambiguating lookaheads mean a lone `-Force`
+does not trigger it. A new `_LOCAL_UNRECOVERABLE` map gives `ps_remove_item_rf`,
+`rmdir_s`, and `del_force` the `recursive_force_delete` surface, so the decision
+engine escalates them in **every** environment. A human structural-approval
+token remains the one legitimate override. `rm -rf` is unchanged - it still
+snapshots its operand and stays reversible.
+
+### Cursor adapter (`beforeShellExecution`)
+`install-hook --cursor` writes a `beforeShellExecution` hook into
+`.cursor/hooks.json` with `failClosed: true`. `demo_cli hook-cursor` reads
+Cursor's stdin JSON (`command`, `cwd`) and returns
+`{"continue": true, "permission": "allow" | "deny" | "ask"}`.
+
+Cursor defaults to fail-open and reliably honors only `deny`, so the adapter
+leans on deny-the-unrecoverable and fails **closed** on its own evaluation
+error (the deliberate opposite of the Claude Code adapter). It steps aside only
+when Cursor delivers no command at all (a known empty-stdin defect), so a
+harness bug never bricks the session. Shell-command gating only in this beta;
+file-edit gating stays Claude Code.
+
+Tests: **85 passing** (22 new: 10 for the hard-stop, 12 for the Cursor adapter).
+
+---
+
 ## 0.4.0b3 - dogfooding fix: plain `rm` now gated
 
 Found during live testing against a real Claude Code session: an agent issuing

@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: demo_cli
+Version: 0.4.0b4
+Summary: A pre-execution safety layer for AI coding agents: preview, snapshot, undo, and a tamper-evident receipt of every decision.
+Author: WePwn
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/WePwn/demo_cli
+Project-URL: Issues, https://github.com/WePwn/demo_cli/issues
+Keywords: ai-agents,safety,guardrails,claude-code,recovery,audit
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Software Development :: Quality Assurance
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: tomli>=2.0; python_version < "3.11"
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+Dynamic: license-file
+
 # demo_cli
 
 A pre-execution safety layer for AI coding agents.
