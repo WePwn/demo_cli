@@ -13,7 +13,7 @@ Built around one invariant:
 > otherwise it is escalated, never silently allowed, and never falsely reported
 > as "recovered".
 
-`0.4.0b4` - public beta. Cooperative-agent threat model (mistakes, not evasion).
+`0.4.0b5` - public beta. Cooperative-agent threat model (mistakes, not evasion).
 
 ---
 
@@ -242,6 +242,7 @@ A production database is reached via a connection string, not by a file called
 | `diff [id]` | show what changed since a recovery point |
 | `verify` | walk the receipt hash-chain → INTACT or TAMPERED |
 | `report` | summarise recorded decisions |
+| `receipt [id]` | print a copy-pasteable, tamper-evident proof card for a receipt (latest, or by id); `--list` shows recent receipt ids |
 | `status` | mode, hook state, receipts, chain integrity, recovery count |
 | `doctor` | check python version, config, pg tools, hook registration, PATH |
 | `prune` | delete old recovery artefacts (`--keep N`, `--older-than DAYS`); receipts are never pruned |
@@ -325,3 +326,11 @@ agent sessions** that produced a wrong decision (false block or missed snapshot)
 Open an issue with the command, your `.demo_cli.toml` (redact credentials), and
 what you expected. Bug reports found through dogfooding, like the `rm app.db`
 case that shaped 0.4.0b3, are exactly what the project needs right now.
+
+To make that trivial, an in-context feedback prompt fires on a wrong-call-worthy
+decision (a block, a context mismatch, or a snapshot): the tool prints a
+`Wrong call? → report it` line with a **prefilled** GitHub issue (decision,
+reason, matched rule, command already filled in). It is consent-based and
+one-directional — a link handed to you, nothing phones home. It stays silent on
+plain `ALLOW`s so it never becomes noise. `demo_cli receipt --share` turns any
+receipt into a plain-text proof card you can paste into an issue or thread.

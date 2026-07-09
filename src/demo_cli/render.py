@@ -16,6 +16,8 @@ from .diff import DiffLine
 from .guard import GuardResult
 from .receipts import VerifyResult
 
+import urllib.parse as _urlparse
+
 _USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
 
 _C = {
@@ -65,6 +67,40 @@ def _label(decision: str) -> str:
 
 def _print(lines: List[str]) -> None:
     print("\n".join(lines))
+
+
+_ISSUE_BASE = "https://github.com/WePwn/demo_cli/issues/new"
+
+# Only prompt on decisions a user might consider *wrong* — a hard stop, a
+# context mismatch, or a snapshot that fired. Plain ALLOWs stay silent so the
+# prompt never becomes background noise.
+_FEEDBACK_ON = {ESCALATE, CONTEXT_MISMATCH, REVERSIBLE, DRY_RUN}
+
+
+def feedback_line(r: "GuardResult") -> str:
+    """One consent-based line inviting a wrong-call report via a prefilled
+    GitHub issue. Returns '' when the decision isn't one worth asking about.
+    """
+    d = r.decision
+    if d.decision not in _FEEDBACK_ON:
+        return ""
+
+    title = f"Wrong call: {d.decision} on `{(r.command or '')[:60]}`"
+    body = (
+        "**What demo_cli decided**\n"
+        f"- decision: {d.decision}\n"
+        f"- reason: {d.reason}\n"
+        f"- matched rule: {r.classification.matched_rule or '-'}\n"
+        f"- command: `{(r.command or '')[:200]}`\n\n"
+        "**What I expected instead**\n"
+        "<!-- e.g. this should have been allowed / should have snapshotted / "
+        "should have blocked -->\n\n"
+        "**My .demo_cli.toml** (redact credentials)\n"
+        "```toml\n\n```\n"
+    )
+    url = f"{_ISSUE_BASE}?" + _urlparse.urlencode({"title": title, "body": body})
+    # Keep the visible line short; the long prefilled URL rides in the link.
+    return c("  Wrong call? ", "dim") + c("→ report it (prefilled): ", "dim") + url
 
 
 def render_result(r: GuardResult, version: str) -> None:
@@ -125,6 +161,9 @@ def render_result(r: GuardResult, version: str) -> None:
         for i, step in enumerate(d.next_steps, 1):
             lines.append(f"  {i}. {step}")
 
+    fb = feedback_line(r)
+    if fb:
+        lines += ["", fb]
     lines.append("")
     lines.append(c(f"  mode: {r.mode}"
                    + ("" if r.mode == "enforce" else "  (observe-only; nothing was blocked)"), "dim"))

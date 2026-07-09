@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.0b5 - shareable proof cards + in-context feedback prompt
+
+Two adoption-phase features. No telemetry: the only feedback channel is what a
+user chooses to send. Both additions honour that — nothing phones home.
+
+### `receipt --share` — a shareable proof card
+`demo_cli receipt [id] --share` renders a single receipt as a plain-text,
+copy-pasteable card (the exact command caught, the decision, the hash chain,
+and a one-line command anyone can run to verify the chain). `--list` shows
+recent receipt ids; the id argument accepts the same 8-char prefix shown by
+`log`/`undo`. The card is deliberately colour-free so it pastes cleanly into a
+forum, PR, or issue, and it inherits the write-time redaction of `action_raw`.
+
+Its correctness invariant carries into the shared artifact: an `ESCALATE` card
+states *hard-stopped before it ran — no honest recovery point exists*, a
+`REVERSIBLE` card states *recovery point captured*. The card never claims a
+recovery it does not hold.
+
+`receipts.py` gains read-side access to the ledger (`load_receipts`,
+`find_receipt`) plus the card builder (`share_card`), all reusing the existing
+`_canon`/hashing. `cli.py` gains the `receipt` subcommand.
+
+### In-context feedback prompt
+After a wrong-call-worthy decision (`ESCALATE`, `CONTEXT_MISMATCH`,
+`REVERSIBLE`, `DRY_RUN`), `demo_cli check` prints one `Wrong call? → report it`
+line carrying a **prefilled** GitHub issue (decision, reason, matched rule, and
+command already filled in). Consent-based and one-directional — a link handed to
+the user, no telemetry. Silent on plain `ALLOW`/`SANDBOX` so it never becomes
+background noise. `render.py` gains `feedback_line`; `render_result` prints it
+just above the mode line. (The hook/quiet stderr path is intentionally left
+terse — the prompt rides the interactive `check` path only.)
+
+Zero new dependencies. Scope closed to these two features; classifier, adapters,
+snapshot, and recovery are untouched.
+
+Tests: **89 passing** (4 new; on Windows,
+`test_concurrent_appends_keep_chain_intact` remains a pre-existing best-effort
+lock limitation, not from these changes — see Known issues).
+
+---
+
 ## 0.4.0b4 - recursive-force hard-stop + Cursor adapter
 
 Two builds shipped together.

@@ -17,7 +17,7 @@ from .context import Intent, normalize_env
 from .decide import CONTEXT_MISMATCH, ESCALATE
 from .diff import diff_entry
 from .guard import Guard
-from .receipts import verify_chain
+from .receipts import verify_chain, find_receipt, share_card, load_receipts
 from .version import __version__
 
 _EXIT = {ESCALATE: 2, CONTEXT_MISMATCH: 1}
@@ -142,6 +142,44 @@ def cmd_report(a) -> int:
     for k, n in sorted(by_decision.items()):
         print(render.kv("  " + k, n))
     print()
+    return 0
+
+
+def cmd_receipt(a) -> int:
+    """`demo_cli receipt --share [id]` — print a copy-pasteable proof card for a
+    single receipt (the latest, or one by id). `--list` shows recent receipt ids.
+    """
+    cfg = load_config()
+
+    if getattr(a, "list", False):
+        rows = load_receipts(cfg.receipts_path)
+        if not rows:
+            print("No receipts yet. Run some commands through the hook or `demo_cli check` first.")
+            return 0
+        print(render.c(f"\ndemo_cli {__version__}  receipts\n", "dim"))
+        print("  " + render.c(f"{'id':<10}{'when':<27}{'decision':<16}action", "dim"))
+        for r in rows[-20:]:
+            rid = str(r.get("receipt_id", "?"))[:8]
+            ts = str(r.get("timestamp", "?"))[:25]
+            dec = str(r.get("decision", "?"))[:15]
+            act = str(r.get("action_raw", ""))
+            if len(act) > 40:
+                act = act[:37] + "..."
+            print(f"  {rid:<10}{ts:<27}{dec:<16}{act}")
+        print()
+        return 0
+
+    receipt = find_receipt(cfg.receipts_path, getattr(a, "id", None))
+    if not receipt:
+        if getattr(a, "id", None):
+            print(f"No receipt matched id '{a.id}'. Try `demo_cli receipt --list`.")
+        else:
+            print("No receipts yet. Run some commands through the hook or `demo_cli check` first.")
+        return 1
+
+    # --share is the default (and only) rendering today; the card is plain text
+    # so it can be pasted straight into a forum, PR, or issue.
+    print(share_card(receipt))
     return 0
 
 
@@ -334,6 +372,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     rp = sub.add_parser("report", parents=[common], help="summarise recorded decisions (shadow report)")
     rp.set_defaults(func=cmd_report)
+
+    rc = sub.add_parser("receipt", parents=[common],
+                        help="show a copy-pasteable proof card for a receipt")
+    rc.add_argument("id", nargs="?", default=None,
+                    help="receipt id (see `demo_cli receipt --list`); default: latest")
+    rc.add_argument("--share", action="store_true",
+                    help="print the shareable proof card (default action)")
+    rc.add_argument("--list", action="store_true",
+                    help="list recent receipt ids instead of printing a card")
+    rc.set_defaults(func=cmd_receipt)
 
     st = sub.add_parser("status", parents=[common], help="show mode, hook, receipts, recovery points")
     st.set_defaults(func=cmd_status)
