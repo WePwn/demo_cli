@@ -1,19 +1,40 @@
 # demo_cli
 
-A pre-execution safety layer for AI coding agents.
+**Claude Code and Cursor *ask* you to confirm dangerous commands, or *block* them. Neither snapshots first — and their undo doesn't cover shell commands or databases.**
 
-Before a destructive command runs, demo_cli **previews** what it would do,
-**snapshots** the real target so it can be **undone**, and writes a
-**tamper-evident receipt** of every decision, including the agent's stated
-reasoning.
+demo_cli snapshots the real target **before** a destructive command runs, so a wrong call is reversible with one command. **Confirming ≠ recovering.**
+
+Before `rm -rf`, `rmdir /s /q`, `Remove-Item -Recurse -Force`, `git reset --hard`, or `DROP TABLE` executes, demo_cli captures what's about to be destroyed and writes a tamper-evident receipt of the decision. If the agent gets it wrong, `demo_cli undo` brings it back. When it *can't* prove recovery (`terraform destroy`, `git push --force`, remote/cloud resources, or a recursive-force delete with no recoverable target), it hard-blocks instead of faking safety.
+
+The whole design in one line: **recovery is the default; blocking is the fallback for the truly unrecoverable — not the default for everything.**
+
+### Start in shadow mode — it changes nothing
+
+Default mode is observe-only: it logs what it *would* have caught and touches nothing. Run it a week on a low-stakes project, read the receipts, then decide whether to let it act.
+
+```bash
+pipx install git+https://github.com/WePwn/demo_cli.git@beta
+demo_cli init        # shadow mode by default — observes, never blocks
+demo_cli doctor      # verify the install
+```
+
+### Why you can trust it
+
+- **No telemetry — it phones nobody.** Verify it yourself: `grep -rn "requests\|urllib\|http\|socket" src/`
+- **One small, readable, MIT-licensed codebase** — read exactly what it does before you run it.
+- **Tamper-evident receipts** — every decision is hash-chained and independently verifiable (`demo_cli verify`).
+
+### "Why not just use git / Claude Code checkpoints?"
+
+git and Claude Code's rewind can't recover an `rm -rf` outside the repo, a dropped database, or an overwrite of an untracked file — they don't snapshot before shell commands run. That's the exact gap demo_cli fills.
+
+> **Threat model:** cooperative agents making mistakes, not adversarial evasion. An agent actively trying to evade protection is out of scope — no hook solves that.
+
+`0.4.0b5` — public beta.
 
 Built around one invariant:
 
-> A mutating action must be recoverable **and** match its declared context
-> otherwise it is escalated, never silently allowed, and never falsely reported
-> as "recovered".
-
-`0.4.0b5` - public beta. Cooperative-agent threat model (mistakes, not evasion).
+> A mutating action must be recoverable **and** match its declared context — otherwise it is escalated, never silently allowed, and never falsely reported as "recovered".
 
 ---
 
