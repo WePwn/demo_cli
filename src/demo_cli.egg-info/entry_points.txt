@@ -1,2 +1,0 @@
-[console_scripts]
-demo_cli = demo_cli.cli:main

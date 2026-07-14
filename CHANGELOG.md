@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.0b6 - multi-path recovery, brace expansion, affected-files preview
+
+This is where the auto-fire recovery path changed. (0.4.0b5 correctly stated
+that *its* changes left snapshot/recovery untouched; the work below lands on top
+of it.) It closes a live data-loss incident and finishes the shell-expansion
+story the snapshot depends on.
+
+### Multi-path `rm` now captures the common directory (was: escalate)
+Forced by a live incident (`claude-code#76626`): an agent ran
+`rm -f Reports/report_*.txt Reports/report_*.png` meaning only to count the
+files. Every path was local, bounded, and trivially copyable - precisely the
+case where full capture is *provable* - yet the old rule returned `None` for any
+multi-path `rm` and escalated, and the files were permanently gone. Now, several
+paths that collapse into one capturable directory snapshot **that directory**: a
+superset of the blast radius, so recovery stays provable, never partial. Paths
+that do not collapse to one bounded directory still return `None` and still
+escalate. The size cap in `snapshot()` and the project-root bound in `guard()`
+both still apply on top.
+
+### Shell expansion, done the way the shell does it
+The command reaches the hook *before* the shell has touched it, so globs and
+braces arrive literally and `os.path.exists()` on them is `False` - which is why
+the extractor used to see zero operands and capture nothing.
+
+* **Globs** (`Reports/*.png`) are expanded so the real operands are seen.
+* **Brace expansion** (`file{1,2,3}.txt`, `{a..z}`, `{a,b}{1,2}`, nesting) is now
+  handled too - the same failure mode as globs, and unconditional in bash, so a
+  brace-delete now fires the snapshot instead of slipping through. Bounded by
+  `_BRACE_MAX`; a pathological expansion falls back to the literal token (i.e.
+  the honest escalate path), never an unbounded blow-up.
+
+### Affected-files preview
+`expanded_operands(cmd)` is now wired into the rendered output: `check` prints an
+**Affected files (preview)** section listing the concrete files an `rm` / `mv`
+will touch. That is the uKER insight made real - the agent wanted a file count;
+the expansion *is* the file count - shown in the same operation, so an accidental
+mass-delete is impossible to approve blind. Also surfaced in `--json`
+(`affected_paths`).
+
+### Project-root capture refusal
+A two-file `rm` at the top level of a project collapses to a common root of the
+whole project; silently deep-copying the entire tree on every such `rm` is
+neither honest nor cheap. The project root itself is now refused as a capture
+surface (same spirit as refusing `$HOME` / the filesystem root) and escalates
+instead. A common root that is a real *subdirectory* (the incident case) still
+captures and stays reversible.
+
+### Honesty notes pinned in the code
+`extract_path_operand` now documents that it is **not** the honesty boundary by
+itself - when a single operand exists among several, the result collapses to that
+path even outside the project, and it is the guard's `within` check that refuses
+it; do not reuse the function without that bound. `restore_entry` documents that
+directory restore is **coarse** (it reverts the whole captured directory to its
+snapshot state), which is what keeps recovery a provable superset.
+
+Tests: **101 passing** (+9: brace expansion, expanded-operands gating, the
+project-root refusal, and the multi-path/glob capture cases).
+
 ## 0.4.0b5 - shareable proof cards + in-context feedback prompt
 
 Two adoption-phase features. No telemetry: the only feedback channel is what a

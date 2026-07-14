@@ -16,6 +16,7 @@ import datetime
 import json
 import os
 import re
+import glob as _glob
 import shutil
 import subprocess
 import uuid
@@ -86,33 +87,213 @@ def resolve_target(cmd: str, explicit_db: Optional[str] = None,
 _RM_RE = re.compile(r"^\s*(?:sudo\s+)?rm\b", re.I)
 _MV_RE = re.compile(r"^\s*(?:sudo\s+)?mv\b", re.I)
 
+# Brace expansion. The shell expands `{a,b}` and `{1..3}` BEFORE globbing and
+# *unconditionally* - independent of what exists on disk - so `rm file{1,2,3}.txt`
+# deletes three files even though none of them is named literally anywhere. This
+# is the same failure mode as the glob one: the command reaches us as the literal
+# string, so if we do not expand braces ourselves we see one non-existent operand
+# and snapshot nothing. Bounded by _BRACE_MAX: a pathological expansion falls back
+# to the literal token (we capture nothing for it -> the honest escalate path),
+# never an unbounded blow-up.
+_BRACE_MAX = 1024
+
+
+def _split_top_commas(s: str) -> List[str]:
+    """Split on commas at brace-depth 0 only, so nested groups stay intact."""
+    parts, depth, cur = [], 0, []
+    for ch in s:
+        if ch == "{":
+            depth += 1
+            cur.append(ch)
+        elif ch == "}":
+            depth -= 1
+            cur.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return parts
+
+
+def _expand_range(inner: str) -> Optional[List[str]]:
+    """Expand a `{m..n}` numeric or `{a..z}` single-char range, or None."""
+    m = re.fullmatch(r"(-?\d+)\.\.(-?\d+)", inner)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        step = 1 if b >= a else -1
+        vals = range(a, b + step, step)
+        return None if len(vals) > _BRACE_MAX else [str(v) for v in vals]
+    m = re.fullmatch(r"([a-zA-Z])\.\.([a-zA-Z])", inner)
+    if m:
+        a, b = ord(m.group(1)), ord(m.group(2))
+        step = 1 if b >= a else -1
+        vals = range(a, b + step, step)
+        return None if len(vals) > _BRACE_MAX else [chr(v) for v in vals]
+    return None
+
+
+def _first_brace_group(s: str) -> Optional[tuple]:
+    """Index span (start, end) of the first balanced top-level {...}, or None."""
+    depth, start = 0, -1
+    for i, ch in enumerate(s):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                return start, i
+    return None
+
+
+def _expand_braces(token: str) -> List[str]:
+    """Expand shell brace syntax in one operand, bash-style: `{a,b,c}` lists and
+    `{m..n}` / `{a..z}` ranges, including nesting and cartesian products
+    (`{a,b}{1,2}` -> a1 a2 b1 b2). A group with no top-level comma and no valid
+    range (e.g. `{foo}`) stays literal, exactly as the shell leaves it. Falls
+    back to the unexpanded token if the expansion would exceed _BRACE_MAX."""
+    grp = _first_brace_group(token)
+    if grp is None:
+        return [token]
+    a, b = grp
+    pre, inner, post = token[:a], token[a + 1:b], token[b + 1:]
+    options = _split_top_commas(inner)
+    if len(options) <= 1:
+        rng = _expand_range(inner)
+        if rng is None:
+            # Not expandable: keep this group literal, expand anything after it.
+            return [token[:b + 1] + tail for tail in _expand_braces(post)]
+        options = rng
+    result: List[str] = []
+    for opt in options:
+        for opt_x in _expand_braces(opt):          # options may nest
+            for tail in _expand_braces(post):
+                result.append(pre + opt_x + tail)
+                if len(result) > _BRACE_MAX:
+                    return [token]                 # pathological -> literal
+    return result
+
 
 def _path_operands(cmd: str) -> List[str]:
     """Crude operand extraction: drop the leading command word(s) and any flags,
     keep the rest as candidate paths. Not a shell parser - good enough to find
-    the target of a simple rm / mv."""
+    the target of a simple rm / mv.
+
+    Braces and globs are expanded here the way the shell would expand them, in
+    that order (braces first, then glob each result). The command we are handed
+    has NOT been through the shell yet: `rm -f Reports/*.png` and
+    `rm file{1,2,3}.txt` both arrive as literal strings, so os.path.exists() on
+    them is False and the operand extractor would see nothing at all. Expanding
+    them ourselves is the only way to know what the command will actually
+    destroy - which is also, exactly, the thing the user needed to see.
+    """
     out: List[str] = []
     for tok in cmd.strip().split():
         if tok in ("sudo", "rm", "mv"):
             continue
         if tok.startswith("-"):
             continue
-        out.append(tok.strip("'\""))
+        tok = tok.strip("'\"")
+        for piece in _expand_braces(tok):
+            if any(ch in piece for ch in "*?["):
+                out.extend(sorted(_glob.glob(piece)))
+            else:
+                out.append(piece)
     return out
 
 
-def extract_path_operand(cmd: str) -> Optional[str]:
-    """Return the single filesystem path an rm / mv will affect, or None.
+def _too_broad(path: str) -> bool:
+    """Capture surfaces we refuse however small they measure: the filesystem
+    root, a Windows drive root, and $HOME. `rm ~/a ~/b` must never quietly
+    become "snapshot the entire home directory"."""
+    ap = os.path.abspath(path)
+    if os.path.dirname(ap) == ap:                       # "/" or "C:\\"
+        return True
+    return ap == os.path.abspath(os.path.expanduser("~"))
 
-    Honesty rule (the invariant): if an rm names *several* existing paths we
-    return None rather than snapshot only one and imply full recovery - the
-    orchestrator then escalates instead of claiming reversibility it can't
-    deliver. For mv we protect the destination when it already exists (the
-    overwrite case), otherwise the source.
+
+def _common_capture_root(paths: List[str]) -> Optional[str]:
+    """The one directory that provably contains every path the command can
+    affect. Snapshotting it captures a SUPERSET of the damage, so the recovery
+    stays provable rather than partial - which is the whole invariant. Returns
+    None when no such directory exists, or when it would be absurdly broad."""
+    try:
+        root = os.path.commonpath([os.path.abspath(p) for p in paths])
+    except ValueError:                                  # different drives (Windows)
+        return None
+    if not os.path.isdir(root):
+        root = os.path.dirname(root)
+    if not root or not os.path.isdir(root) or _too_broad(root):
+        return None
+    return root
+
+
+def expanded_operands(cmd: str) -> List[str]:
+    """The concrete list of existing paths an rm / mv will touch.
+
+    Exposed so the preview can PRINT it. claude-code#76626: an agent ran
+    `rm -f Reports/report_*.txt Reports/report_*.png` intending "just to check
+    the current file count". The glob expansion IS the file count. Showing this
+    list answers the question the agent was asking and makes the deletion
+    impossible to approve by accident, in the same operation. The preview is not
+    friction here - the preview is the task.
+
+    Returns [] for anything that is not an rm / mv, so callers can invoke it
+    unconditionally: the crude operand split is only meaningful for those two.
+    """
+    if not (_RM_RE.search(cmd) or _MV_RE.search(cmd)):
+        return []
+    return [p for p in _path_operands(cmd) if os.path.exists(p)]
+
+
+def extract_path_operand(cmd: str) -> Optional[str]:
+    """Return the filesystem path an rm / mv will affect, or None.
+
+    Honesty rule (the invariant): never snapshot a SUBSET and imply full
+    recovery.
+
+    v0.4 - a multi-path rm used to return None unconditionally. That was too
+    blunt, and it cost someone their work. Live incident, claude-code#76626: an
+    agent ran
+
+        rm -f Reports/report_*.txt Reports/report_*.png
+
+    intending only to count the files. Every path was local, bounded and cheap
+    to copy - precisely the case where full capture is PROVABLE - and the old
+    rule escalated instead of capturing. Not in the recycle bin (no CLI delete
+    ever is), not git-tracked, not in shadow copies. Permanently gone.
+
+    So: several paths that collapse into one capturable directory now snapshot
+    that DIRECTORY. It is a superset of everything the command can touch, so the
+    recovery is still provable, never partial. Anything that does NOT collapse
+    to one bounded directory still returns None and still escalates honestly.
+    The size cap in snapshot() and the project-root bound in guard() both still
+    apply on top of this.
+
+    Two cautions for anyone touching this later:
+
+    * This function is NOT the honesty boundary by itself. When only one operand
+      exists among several, the result collapses to that single path even if it
+      lies outside the project; it is the guard's `within` project-root check
+      (guard.evaluate) that refuses to snapshot or claim reversibility for it.
+      Do not reuse extract_path_operand at a new call site without that bound.
+    * The directory return means undo is COARSE: restoring a multi-path rm
+      restores the whole captured directory to its snapshot state (see
+      restore_entry). That is what keeps recovery a provable superset, but it
+      also rolls back unrelated edits made to other files in that directory
+      after the snapshot. Immediately after the rm (the flagship flow) this is a
+      non-issue; the window only matters if other writes land before undo.
     """
     if _RM_RE.search(cmd):
         existing = [p for p in _path_operands(cmd) if os.path.exists(p)]
-        return existing[0] if len(existing) == 1 else None
+        if len(existing) == 1:
+            return existing[0]
+        if len(existing) > 1:
+            return _common_capture_root(existing)
+        return None
     if _MV_RE.search(cmd):
         ops = _path_operands(cmd)
         if len(ops) >= 2:
@@ -356,6 +537,13 @@ def restore_entry(entry: dict) -> bool:
     if kind == "dir":
         if not rp or not os.path.isdir(rp):
             return False
+        # Coarse by design: copytree overlays the snapshot back onto the target,
+        # bringing deleted files back and reverting modified ones to their
+        # snapshot state, while leaving files created after the snapshot in
+        # place. For a multi-path rm captured as its common directory this
+        # restores the whole directory, which is exactly what makes the recovery
+        # a provable superset - and also why an edit made to an unrelated file in
+        # that directory after the snapshot would be rolled back here.
         shutil.copytree(rp, target, dirs_exist_ok=True)
         return True
     if kind == "postgres":

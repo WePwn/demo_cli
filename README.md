@@ -8,6 +8,10 @@ Before `rm -rf`, `rmdir /s /q`, `Remove-Item -Recurse -Force`, `git reset --hard
 
 The whole design in one line: **recovery is the default; blocking is the fallback for the truly unrecoverable, not the default for everything.**
 
+![demo_cli snapshots before an agent's rm, lets it run, and undoes it in one command](https://cdn.wepwn.ma/images/demo/demo_recover.gif)
+
+*A real session. The agent's delete is **not** blocked, it runs, the files really are gone, and one command brings them back. This is [claude-code#76626](https://github.com/anthropics/claude-code/issues/76626): an agent ran `rm -f Reports/report_*.txt Reports/report_*.png` intending only to count the files. That user's screenshots, referenced across 57 open tickets, are gone for good. Not in the recycle bin (no CLI delete ever is), not in git, not in a shadow copy.*
+
 ### Start in shadow mode, it changes nothing
 
 Default mode is observe-only: it logs what it *would* have caught and touches nothing. Run it a week on a low-stakes project, read the receipts, then decide whether to let it act.
@@ -30,7 +34,7 @@ git and Claude Code's rewind can't recover an `rm -rf` outside the repo, a dropp
 
 > **Threat model:** cooperative agents making mistakes, not adversarial evasion. An agent actively trying to evade protection is out of scope, no hook solves that.
 
-`0.4.0b5`, public beta.
+`0.4.0b6`, public beta.
 
 Built around one invariant:
 
@@ -59,6 +63,15 @@ demo_cli starts from the opposite default: **recovery, not blocking.**
 
 Blocking is the fallback for the un-recoverable, not the default for everything.
 That's the whole design.
+
+### And when it cannot recover, it says so
+
+![demo_cli refuses an rsync to a remote host and explicitly refuses to claim a recovery point](https://cdn.wepwn.ma/images/demo/demo_honest.gif)
+
+*An `rsync --delete` to a production host over SSH. No snapshot on your machine
+can reach the far end of that connection, so demo_cli does not take one and does
+not pretend it did. The most important line a safety tool can print is the one
+admitting what it did not do.*
 
 ---
 
@@ -281,6 +294,32 @@ Exit codes for `check`: `0` allow, `1` context mismatch, `2` escalate.
 **Snapshot targets:** sqlite files, postgres (via `pg_dump`/`pg_restore`),
 individual files, directories (capped at `DEMO_CLI_MAX_SNAPSHOT_MB`, default 256 MB).
 
+**Shell expansion is resolved before the decision is made.** The command reaches
+the hook *before* the shell has touched it, so `Reports/*.png` and
+`file{1,2,3}.txt` arrive as literal strings, and a naive `os.path.exists()` on
+them returns false. demo_cli expands globs and braces itself (`{a..z}`, `{a,b}{1,2}`,
+nested, bounded), so it sees the operands the shell will actually pass to `rm`.
+Skipping this is how a mass delete slips through with no snapshot taken.
+
+**Affected files are printed before the action runs.** `check` renders an
+**Affected files (preview)** section listing the concrete paths an `rm` / `mv`
+will touch (also in `--json` as `affected_paths`). In the incident above, the
+agent's stated goal was to *count* the files matching `Reports/report_*`, and the
+expansion of that glob **is** that count, so the preview answers the question the
+agent was asking and makes an accidental mass delete impossible to approve blind,
+in the same operation.
+
+**Multi-path deletes are captured when full capture is provable.** Several paths
+that collapse into one capturable *subdirectory* snapshot **that directory**, a
+superset of the blast radius, so recovery stays provable rather than partial.
+Paths that do not collapse to one bounded directory still escalate.
+
+**Capture surfaces that are always refused,** however small they measure:
+`$HOME`, the filesystem root, a Windows drive root, and the **project root
+itself**. A two-file `rm` at the top of a repo collapses to a common root of the
+whole project, and silently deep-copying the entire tree on every such delete is
+neither honest nor cheap, so it escalates instead.
+
 **Escalated honestly, never falsely snapshotted:** terraform/kubectl/cloud
 destroy commands, `git push --force`, remote filesystem changes, object-storage
 deletions, external side effects (email, payments, webhooks), credential rotation,
@@ -310,11 +349,21 @@ cannot forge it.
 - **PATH:** `demo_cli` must be resolvable in the shell where `claude` runs.
   Install with `pipx`, or keep the virtualenv active. Run `demo_cli doctor`
   to check. If the binary is not found, Claude Code silently skips the hook.
-- **Single-path `rm`:** `rm a.py b.py` (multiple targets) escalates rather than
-  partially snapshotting one file. This is intentional - partial recovery is
-  not honest recovery.
+- **Directory restore is coarse.** Undoing a directory snapshot reverts the
+  **whole captured directory** to its snapshot state. That coarseness is exactly
+  what keeps recovery a provable superset rather than a partial guess, but it
+  also means unrelated edits made inside that directory *after* the snapshot are
+  reverted too. Run `demo_cli diff <id>` before `undo <id>`.
+- **A multi-path `rm` at the project top level escalates.** If the paths collapse
+  to a common root that is the project root itself (`rm a.py b.py` at the top of
+  your repo), demo_cli refuses to deep-copy the whole tree and escalates. Paths
+  that collapse to a real subdirectory (`rm Reports/*.txt Reports/*.png`) are
+  captured and stay reversible.
 - **`mv` is conservative:** most two-argument `mv` commands are flagged. Safe
   renames inside the project workspace will be narrowed in a future release.
+- **A pathological brace expansion falls back to the literal token,** which means
+  the honest escalate path rather than an unbounded expansion. Bounded by
+  `_BRACE_MAX`.
 
 ---
 
@@ -335,7 +384,7 @@ print(result.permission)          # allow
 ```bash
 pip install -e ".[dev]"
 pytest -q
-# 85 tests, passing on Python 3.9 – 3.14
+# 101 tests, passing on Python 3.9 – 3.14
 ```
 
 ---

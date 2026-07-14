@@ -148,6 +148,15 @@ def render_result(r: GuardResult, version: str) -> None:
         for row in r.preview_rows[:5]:
             lines.append("    " + " | ".join(str(x) for x in row))
 
+    if r.affected_paths:
+        n = len(r.affected_paths)
+        lines += ["", c("Affected files (preview)", "yellow"),
+                  kv("files matched", n)]
+        for p in r.affected_paths[:10]:
+            lines.append("    " + c("• " + redact(p), "dim"))
+        if n > 10:
+            lines.append("    " + c(f"... and {n - 10} more", "dim"))
+
     if r.recovery_entry:
         lines += ["", c("Recovery", "green"),
                   kv("snapshot", os.path.basename(r.recovery_entry["recovery_point"])),
@@ -257,6 +266,7 @@ def result_json(r: GuardResult, version: str) -> dict:
         "recovery_point": (r.recovery_entry or {}).get("recovery_point"),
         "recovery_id": (r.recovery_entry or {}).get("id"),
         "preview_affected_rows": r.preview_count,
+        "affected_paths": r.affected_paths,
         "context_mismatches": [list(m) for m in r.mismatches],
         "receipt_hash": r.receipt.receipt_hash if r.receipt else None,
         "next_steps": r.decision.next_steps,

@@ -41,6 +41,7 @@ class GuardResult:
     preview_rows: list = field(default_factory=list)
     preview_cols: list = field(default_factory=list)
     mismatches: List[Tuple[str, str, str]] = field(default_factory=list)
+    affected_paths: List[str] = field(default_factory=list)
     receipt: Optional[Receipt] = None
 
     @property
@@ -83,6 +84,11 @@ class Guard:
 
         c = classify_pipeline(command)
 
+        # The concrete file list an rm / mv will touch (brace/glob-expanded),
+        # surfaced so the preview can PRINT it - the file count the agent was
+        # actually asking for (claude-code#76626). Empty for non rm / mv.
+        affected_paths = recovery.expanded_operands(command)
+
         # Trou 2: when no target was supplied explicitly, resolve the real
         # filesystem operand of an rm / mv so the snapshot actually fires on the
         # auto-fire path (the flagship "rm -> undo" moment). Bounded to the
@@ -97,7 +103,12 @@ class Guard:
                     within = os.path.commonpath([ap, root]) == root
                 except ValueError:
                     within = False
-                if within and os.path.exists(ap):
+                # Refuse the project root itself as a capture surface: a two-file
+                # rm at the top level collapses to a common root of the whole
+                # project, and silently deep-copying the entire tree on every such
+                # rm is neither honest nor cheap. Escalate instead - same spirit
+                # as _too_broad refusing $HOME / the filesystem root.
+                if within and ap != root and os.path.exists(ap):
                     target_path = ap
 
         target = recovery.resolve_target(command, explicit_db, db_url, target_path)
@@ -169,7 +180,7 @@ class Guard:
             command=command, classification=c, context=ctx, decision=decision, mode=self.mode,
             target=target, recovery_entry=entry,
             preview_count=preview_count, preview_rows=preview_rows, preview_cols=preview_cols,
-            mismatches=mismatches, receipt=receipt,
+            mismatches=mismatches, affected_paths=affected_paths, receipt=receipt,
         )
 
     def evaluate_file_edit(
