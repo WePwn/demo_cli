@@ -37,14 +37,51 @@ def test_guard_snapshots_named_db_and_is_reversible(tmp_path):
     assert r.allowed is True
 
 
-def test_guard_remove_item_denies_end_to_end(tmp_path):
-    # The public claim, exercised the way a tester would: Remove-Item -Recurse
-    # -Force is denied, and in a low-blast dev workspace too.
-    (tmp_path / "build").mkdir()
+def test_guard_remove_item_recoverable_target_is_reversible(tmp_path):
+    # v0.4.0b7 truth-repair: a Remove-Item -Recurse -Force whose single target
+    # exists inside the project root is now genuinely snapshotted first, and
+    # allowed - even in a low-blast dev workspace - instead of a blanket deny.
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "keep.txt").write_text("data")
     g = Guard(config=_cfg(tmp_path))
-    r = g.evaluate("Remove-Item -Recurse -Force ./build", actual_env="development")
+    r = g.evaluate(f"Remove-Item -Recurse -Force {build}", actual_env="development")
+    assert r.decision.decision == REVERSIBLE
+    assert r.recovery_entry is not None
+    assert r.permission == "allow"
+    assert r.allowed is True
+
+
+def test_guard_remove_item_unresolved_target_still_denies_end_to_end(tmp_path):
+    # The public claim survives for the case it was written for: no target
+    # this tool can pin down and prove -> hard-stop, even in a low-blast dev
+    # workspace.
+    g = Guard(config=_cfg(tmp_path))
+    missing = tmp_path / "does-not-exist"
+    r = g.evaluate(f"Remove-Item -Recurse -Force {missing}", actual_env="development")
     assert r.decision.decision == ESCALATE
+    assert r.recovery_entry is None
     assert r.permission == "deny"
+    assert r.allowed is False
+
+
+def test_guard_rm_multi_path_out_of_project_escalates(tmp_path):
+    # One operand inside the configured project root, one outside it
+    # entirely (a sibling temp directory). Even if extract_path_operand can
+    # find *some* bounded common directory for the two, guard.evaluate must
+    # refuse to snapshot or claim reversibility for anything outside the
+    # project root - this is the "within" bound described in
+    # recovery.extract_path_operand's docstring. actual_env is forced to
+    # production so the assertion is not at the mercy of the environment
+    # heuristic picking up "Local"/"test" from a Windows temp path.
+    project = tmp_path / "project"; project.mkdir()
+    inside = project / "a.txt"; inside.write_text("1")
+    outside_root = tmp_path / "elsewhere"; outside_root.mkdir()
+    outside = outside_root / "b.txt"; outside.write_text("2")
+    g = Guard(config=_cfg(project))
+    r = g.evaluate(f"rm -rf {inside} {outside}", actual_env="production")
+    assert r.decision.decision == ESCALATE
+    assert r.recovery_entry is None
     assert r.allowed is False
 
 

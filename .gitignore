@@ -8,3 +8,7 @@ __pycache__/
 .env
 .env.*
 demo_cli_receipts.jsonl
+.claude/
+.demo_cli/
+.demo_cli.toml
+*.egg-info/

@@ -15,10 +15,22 @@ def _run(payload, tmp_path, mode="enforce"):
     return rc, json.loads(out.getvalue())
 
 
-def test_cursor_denies_remove_item_recurse_force(tmp_path):
-    # The truth-repair claim, exercised through the Cursor surface.
-    (tmp_path / "build").mkdir()
-    payload = {"command": "Remove-Item -Recurse -Force ./build", "cwd": str(tmp_path)}
+def test_cursor_allows_remove_item_recurse_force_with_recoverable_target(tmp_path):
+    # v0.4.0b7: a resolvable, in-project target is genuinely snapshotted and
+    # allowed through the Cursor surface too, not blanket-denied.
+    build = tmp_path / "build"
+    build.mkdir()
+    payload = {"command": f"Remove-Item -Recurse -Force {build}", "cwd": str(tmp_path)}
+    rc, resp = _run(payload, tmp_path)
+    assert rc == 0
+    assert resp["permission"] == "allow"
+    assert resp["continue"] is True
+
+
+def test_cursor_denies_remove_item_recurse_force_unresolved_target(tmp_path):
+    # The truth-repair claim survives for the case it was written for.
+    missing = tmp_path / "does-not-exist"
+    payload = {"command": f"Remove-Item -Recurse -Force {missing}", "cwd": str(tmp_path)}
     rc, resp = _run(payload, tmp_path)
     assert rc == 0
     assert resp["permission"] == "deny"

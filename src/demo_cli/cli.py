@@ -198,6 +198,70 @@ def _hook_installed(path) -> bool:
     return False
 
 
+def _hook_selftest(tool_name: str, command: str) -> bool:
+    """Run a harmless destructive command through the real hook entrypoint,
+    as the named tool (Bash or PowerShell), and confirm it comes back as a
+    real decision. This proves the wiring end to end, not just that files
+    exist - and running it once per shell tool is what catches a Windows
+    install where only the Bash matcher got registered (PowerShell commands
+    would otherwise silently skip the hook)."""
+    import io
+    import json
+    import os
+    import shutil
+    import tempfile
+
+    from .hooks.claude_code import run_pretooluse
+
+    directory = tempfile.mkdtemp()
+    previous_directory = os.getcwd()
+
+    try:
+        os.chdir(directory)
+
+        with open(os.path.join(directory, "canary.txt"), "w", encoding="utf-8") as file:
+            file.write("safe test file")
+
+        # Force enforce mode inside the temporary test project.
+        with open(os.path.join(directory, ".demo_cli.toml"), "w", encoding="utf-8") as file:
+            file.write('mode = "enforce"\n')
+
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool_name,
+            "tool_input": {
+                "command": command,
+                "description": "demo_cli doctor self-test",
+            },
+            "cwd": directory,
+        }
+
+        output = io.StringIO()
+        run_pretooluse(io.StringIO(json.dumps(payload)), output)
+
+        raw = output.getvalue().strip()
+        if not raw:
+            return False
+
+        response = json.loads(raw)
+        hook_output = response.get("hookSpecificOutput", {})
+        permission = hook_output.get("permissionDecision")
+
+        return permission in {"allow", "deny", "ask"}
+
+    finally:
+        os.chdir(previous_directory)
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+# (tool_name, synthetic destructive command) pairs the doctor self-test drives
+# through the real hook entrypoint - one per shell Claude Code can launch.
+_SELFTEST_PAYLOADS = [
+    ("Bash", "rm -rf canary.txt"),
+    ("PowerShell", "Remove-Item -Recurse -Force canary.txt"),
+]
+
+
 def _any_hook_installed(cfg) -> bool:
     project = os.path.join(cfg.project_root, ".claude", "settings.json")
     glob = os.path.expanduser("~/.claude/settings.json")
@@ -237,6 +301,32 @@ def cmd_doctor(a) -> int:
     hook = _any_hook_installed(cfg)
     checks.append(("ok" if hook else "warn", "claude code hook",
                    "installed" if hook else "not installed (run: demo_cli install-hook)"))
+
+    # THE check that actually predicts protection: is `demo_cli` resolvable on
+    # PATH? Claude Code launches the hook as a bare `demo_cli hook` command in a
+    # fresh shell; if it is not on PATH there, the hook silently never runs and
+    # the user THINKS they are protected. A registered-but-unreachable hook is
+    # worse than no hook, so this is a hard fail, not a warning.
+    on_path = shutil.which("demo_cli")
+    checks.append(("ok" if on_path else "fail", "demo_cli on PATH",
+                   on_path if on_path else
+                   "NOT FOUND - Claude Code will silently skip the hook. "
+                   "Install with pipx or keep your venv active."))
+
+    # End-to-end self-test: feed a known destructive command through the SAME
+    # hook entrypoint Claude Code uses, once per shell tool (Bash, PowerShell),
+    # and confirm each comes back as a real decision. This proves the wiring
+    # end to end, not just that files exist.
+    if hook and on_path:
+        for tool_name, command in _SELFTEST_PAYLOADS:
+            try:
+                selftest_ok = _hook_selftest(tool_name, command)
+                checks.append(("ok" if selftest_ok else "fail", f"hook self-test ({tool_name})",
+                               "a test delete was intercepted and snapshotted"
+                               if selftest_ok else
+                               "hook did NOT intercept a test command - see logs"))
+            except Exception as exc:
+                checks.append(("warn", f"hook self-test ({tool_name})", f"could not run ({exc})"))
 
     render.render_doctor(checks, __version__)
     return 0 if all(s != "fail" for s, _, _ in checks) else 1

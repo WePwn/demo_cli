@@ -73,14 +73,28 @@ def test_context_mismatch_without_recovery_escalates():
     assert d.decision == ESCALATE
 
 
-def test_remove_item_hard_stops_in_every_env():
-    # Truth-repair: publicly stated as blocked, so it must ESCALATE everywhere,
-    # not slip through the low-blast SANDBOX path in a dev/staging environment.
+def test_remove_item_still_hard_stops_in_every_env_when_unrecovered():
+    # v0.4.0b7: ps_remove_item_rf can now be genuinely recovered (see below),
+    # but when the target could NOT be resolved/snapshotted it must still
+    # ESCALATE everywhere, not slip through the low-blast SANDBOX path in a
+    # dev/staging environment - the original truth-repair guarantee, now
+    # conditional on recovery_captured instead of unconditional.
     c = _c("Remove-Item -Recurse -Force ./build")
     for env in ("production", "development", "staging", "unknown"):
         d = decide(c, env, recovery_captured=False)
         assert d.decision == ESCALATE, env
-        assert d.surface == "recursive_force_delete"
+        assert d.surface is None, env
+
+
+def test_remove_item_recoverable_target_is_reversible():
+    # The truth-repair completes the other way: when guard.py DID resolve and
+    # snapshot the real target, ps_remove_item_rf is no longer forced through
+    # the nonrecoverable-surface path and becomes an ordinary recoverable
+    # mutation, in every environment - matching rm -rf's philosophy.
+    c = _c("Remove-Item -Recurse -Force ./build")
+    for env in ("production", "development", "staging", "unknown"):
+        d = decide(c, env, recovery_captured=True)
+        assert d.decision == REVERSIBLE, env
 
 
 def test_rmdir_and_del_hard_stop_in_dev_too():
@@ -94,6 +108,9 @@ def test_rmdir_and_del_hard_stop_in_dev_too():
 def test_recursive_force_delete_overridable_by_structural_approval():
     # A human-signed approval token is still the legitimate escape; the agent
     # cannot forge it. Consistent with the other non-recoverable surfaces.
-    c = _c("Remove-Item -Recurse -Force ./build")
+    # (ps_remove_item_rf is exercised separately above - it is no longer a
+    # classify-time nonrecoverable surface, so this specific override no
+    # longer applies to it; rmdir_s / del_force still carry it unconditionally.)
+    c = _c("rmdir /s /q build")
     d = decide(c, "production", recovery_captured=False, approval_ok=True)
     assert d.decision == ALLOW

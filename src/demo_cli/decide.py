@@ -52,6 +52,17 @@ def posture(disposition: str) -> str:
 
 _LOW_BLAST_ENVS = frozenset({"development", "test", "sandbox", "staging"})
 
+# ps_remove_item_rf (PowerShell `Remove-Item -Recurse -Force`) is no longer in
+# classify.py's unconditional _LOCAL_UNRECOVERABLE set - it is honestly
+# recoverable when guard.py can resolve and snapshot its single target. But
+# when it CANNOT (missing, ambiguous, multi-drive, or out-of-root target),
+# recovery_captured is False, and without this exclusion that would fall
+# through case 6 below into SANDBOX in a dev/staging workspace: the exact
+# "hard-stop everywhere" claim ps_remove_item_rf was carved out to keep. This
+# set skips that fallthrough so it still escalates in every environment,
+# matching rmdir_s / del_force, whose target extraction remains unimplemented.
+_ESCALATE_WHEN_UNRECOVERED = frozenset({"ps_remove_item_rf"})
+
 INVARIANT = "mutating_actions_must_be_recoverable_and_match_the_declared_context"
 
 
@@ -157,8 +168,9 @@ def decide(
             recoverable=True,
         )
 
-    # 6. Not recoverable, but low blast radius (non-production).
-    if environment in _LOW_BLAST_ENVS:
+    # 6. Not recoverable, but low blast radius (non-production) - except a
+    #    small set of local rules that must still hard-stop when unresolved.
+    if environment in _LOW_BLAST_ENVS and c.matched_rule not in _ESCALATE_WHEN_UNRECOVERED:
         return Decision(
             SANDBOX,
             f"Non-production target ({environment}); low blast radius.",

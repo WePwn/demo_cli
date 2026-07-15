@@ -49,10 +49,10 @@ _DESTRUCTIVE_RULES = [
     # cleanly by requiring the recurse token to start "-r" and the force token to
     # start "-f", so a lone `-Force` (which contains an "r") does NOT satisfy the
     # recurse lookahead - only the real `-Recurse -Force` nuke matches. Placed
-    # before rmdir/del so this higher-signal id wins. Escalated unconditionally
-    # (see _LOCAL_UNRECOVERABLE): -Force deletes a whole tree with no recycle bin
-    # and the operand extractor does not resolve its target, so there is no honest
-    # local recovery point to stand behind.
+    # before rmdir/del so this higher-signal id wins. NOT in _LOCAL_UNRECOVERABLE:
+    # recovery.py resolves its target and guard.py snapshots it when possible, so
+    # it is honestly recoverable when the target is a single, existing, in-project
+    # path (see decide.py for the still-unrecovered hard-stop).
     ("ps_remove_item_rf", "shell",
      r"\b(?:Remove-Item|ri)\b(?=[^|;&]*\s-r[a-z]*\b)(?=[^|;&]*\s-f[a-z]*\b)[^|;&]*"),
     ("rmdir_s", "shell", r"\brmdir\b.*\/[sS]"),
@@ -88,17 +88,25 @@ _EXTERNAL_IRREVERSIBLE = {
 }
 
 # Local destructive commands this tool cannot honestly make reversible as built.
-# A recursive-force delete (Remove-Item -Recurse -Force, rmdir /s, del /s|/f)
-# removes a whole tree with no recycle bin, and the operand extractor does not
-# resolve its target, so no recovery point is ever captured. Left as ordinary
-# local deletes they would slip through the low-blast SANDBOX path in a
-# dev/test/staging environment - exactly where an agent runs. Marking them as a
-# non-recoverable surface makes the decision engine escalate them in EVERY
-# environment: a real hard-stop, matching what we state publicly. A human
-# structural-approval token remains the one legitimate override (an agent cannot
-# forge it), consistent with the external non-recoverable surfaces above.
+# `rmdir /s` and `del /s|/f` remove a whole tree with no recycle bin, and the
+# operand extractor does not resolve their target, so no recovery point is ever
+# captured. Left as ordinary local deletes they would slip through the
+# low-blast SANDBOX path in a dev/test/staging environment - exactly where an
+# agent runs. Marking them as a non-recoverable surface makes the decision
+# engine escalate them in EVERY environment: a real hard-stop, matching what we
+# state publicly. A human structural-approval token remains the one legitimate
+# override (an agent cannot forge it), consistent with the external
+# non-recoverable surfaces above.
+#
+# `Remove-Item -Recurse -Force` (ps_remove_item_rf) is deliberately NOT here.
+# recovery.py now extracts its target (a single -Path/-LiteralPath/positional
+# operand) and guard.py snapshots it when it exists inside the project root, so
+# it can be honestly recoverable. This module has no filesystem access (it only
+# describes the command), so it cannot know in advance whether that snapshot
+# will succeed - decide.py is where the still-unrecovered case (missing,
+# ambiguous, multi-drive, or out-of-root target) is kept a hard-stop in every
+# environment rather than falling through to SANDBOX.
 _LOCAL_UNRECOVERABLE = {
-    "ps_remove_item_rf": "recursive_force_delete",
     "rmdir_s": "recursive_force_delete",
     "del_force": "recursive_force_delete",
 }

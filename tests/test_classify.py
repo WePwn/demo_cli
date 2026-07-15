@@ -49,10 +49,15 @@ def test_schema_migration_is_nonrecoverable():
     assert c.nonrecoverable_surface == "schema_migration"
 
 
-def test_remove_item_recurse_force_is_nonrecoverable():
+def test_remove_item_recurse_force_is_destructive_but_not_a_classify_time_surface():
+    # v0.4.0b7: ps_remove_item_rf is no longer an unconditional nonrecoverable
+    # surface at classify time (classify.py has no filesystem access, so it
+    # cannot know whether guard.py will resolve and snapshot the target).
+    # Whether it hard-stops now depends on recovery_captured, decided in
+    # decide.py (see test_decide.py).
     c = classify_pipeline("Remove-Item -Recurse -Force ./build")
     assert c.is_destructive and c.matched_rule == "ps_remove_item_rf"
-    assert c.nonrecoverable_surface == "recursive_force_delete"
+    assert c.nonrecoverable_surface is None
 
 
 def test_remove_item_flag_order_alias_and_abbreviations():
@@ -64,7 +69,7 @@ def test_remove_item_flag_order_alias_and_abbreviations():
     ]:
         c = classify_pipeline(cmd)
         assert c.is_destructive, cmd
-        assert c.nonrecoverable_surface == "recursive_force_delete", cmd
+        assert c.matched_rule == "ps_remove_item_rf", cmd
 
 
 def test_remove_item_requires_both_recurse_and_force():
@@ -86,7 +91,7 @@ def test_rmdir_and_del_are_now_nonrecoverable():
 def test_remove_item_hidden_in_pipeline():
     c = classify_pipeline("echo cleaning && Remove-Item -Recurse -Force ./dist")
     assert c.is_pipeline and c.is_destructive
-    assert c.nonrecoverable_surface == "recursive_force_delete"
+    assert c.matched_rule == "ps_remove_item_rf"
 
 
 def test_unix_rm_rf_unaffected_by_powershell_rule():

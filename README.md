@@ -34,7 +34,7 @@ git and Claude Code's rewind can't recover an `rm -rf` outside the repo, a dropp
 
 > **Threat model:** cooperative agents making mistakes, not adversarial evasion. An agent actively trying to evade protection is out of scope, no hook solves that.
 
-`0.4.0b6`, public beta.
+`0.4.0b7`, public beta.
 
 Built around one invariant:
 
@@ -57,9 +57,12 @@ demo_cli starts from the opposite default: **recovery, not blocking.**
   reversible.
 - It only **blocks** when something genuinely *can't* be recovered: an external
   or irreversible effect (`terraform destroy`, `git push --force`, an object-store
-  delete), or a recursive-force delete that leaves no recoverable target
-  (`Remove-Item -Recurse -Force`, `rmdir /s`, `del /s`). There, it escalates
-  honestly instead of pretending it captured a recovery point.
+  delete), or a recursive-force delete that leaves no recoverable target. A
+  Windows `Remove-Item -Recurse -Force` with a single, existing, in-project
+  target is snapshotted and allowed, same as `rm -rf`; `rmdir /s` and `del /s`
+  remain a hard-stop in every environment until they get the same honest
+  target extraction. There, it escalates honestly instead of pretending it
+  captured a recovery point.
 
 Blocking is the fallback for the un-recoverable, not the default for everything.
 That's the whole design.
@@ -326,15 +329,19 @@ deletions, external side effects (email, payments, webhooks), credential rotatio
 and any database reached over a non-local connection string. demo_cli will not
 claim a recovery it cannot provide.
 
-**Recursive-force deletes are a hard-stop in every environment:**
-`Remove-Item -Recurse -Force` (PowerShell, including the `ri` alias and
-abbreviated `-r`/`-fo` flags in any order), `rmdir /s`, and `del /s|/f`. These
-wipe a whole tree with no recycle bin and expose no target the snapshot layer
-can capture, so there is no honest recovery point to stand behind. They are
-denied even in a `development`/`staging` workspace, where an ordinary,
-snapshottable delete (`rm -rf ./build`) would instead be captured and allowed.
-A human structural-approval token is the one legitimate override; an agent
-cannot forge it.
+**`Remove-Item -Recurse -Force` (PowerShell) is captured when its target is
+provable.** Including the `ri` alias and abbreviated `-r`/`-fo` flags in any
+order: `-Path`, `-LiteralPath`, or a single positional operand that exists
+inside the project root is snapshotted first and allowed, same as `rm -rf`.
+A missing, ambiguous, multi-target, wildcard, or out-of-root target still has
+no honest recovery point to stand behind and is denied - in every
+environment, including `development`/`staging`.
+
+**`rmdir /s` and `del /s|/f` remain a hard-stop in every environment.** These
+wipe a whole tree with no recycle bin and, unlike `Remove-Item`, the operand
+extractor does not yet resolve their target, so there is no honest recovery
+point to stand behind. A human structural-approval token is the one
+legitimate override; an agent cannot forge it.
 
 **Out of scope for this beta:**
 - Adversarial agents deliberately evading classification

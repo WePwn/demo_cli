@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0b7 - Windows: PowerShell hook coverage + honest Remove-Item recovery
+
+Confirmed real-world failure: Claude Code on Windows fired
+`Remove-Item -Recurse -Force ".\victim"` under `tool_name="PowerShell"`. The
+folder was deleted with **no receipt and no recovery point** - the debug log
+showed `Hooks: Found 0 total hooks in registry`. Four root causes, all closed:
+
+* **The installed hook only matched `Bash`.** `install-hook` now also installs
+  a `PowerShell` matcher block; an existing Bash-only install is upgraded
+  in place (the Bash block is left untouched, not duplicated) rather than
+  left silently half-covered.
+* **`run_pretooluse` only evaluated `tool_name == "Bash"`.** PowerShell
+  commands now route through the same `tool_input.command` evaluation path.
+* **`recovery.py` only extracted targets for Unix `rm`/`mv`.** Added
+  conservative `Remove-Item` target extraction: `-Path`, `-LiteralPath`, or a
+  single positional operand. Anything else - missing, ambiguous, multiple
+  targets, multiple drives, or a wildcard - is left unresolved by design, so
+  the caller escalates instead of guessing.
+* **`ps_remove_item_rf` was unconditionally nonrecoverable**, so it could
+  never receive a snapshot even when its target was perfectly resolvable.
+  It is now snapshotted and treated as an ordinary recoverable mutation
+  (`REVERSIBLE`) when the target exists inside the project root; it still
+  hard-stops (`ESCALATE`) in every environment, including
+  `development`/`staging`, when it does not. `rmdir /s` and `del /s|/f`
+  keep the old unconditional hard-stop - their target extraction isn't
+  implemented yet.
+
+The `doctor` self-test now drives a synthetic `PowerShell` payload through
+the real hook entrypoint in addition to the existing `Bash` one, so a
+Windows install where only the Bash matcher registered is caught before an
+agent hits it for real.
+
 ## 0.4.0b6 - multi-path recovery, brace expansion, affected-files preview
 
 This is where the auto-fire recovery path changed. (0.4.0b5 correctly stated

@@ -130,9 +130,52 @@ def test_multi_path_rm_still_refuses_when_capture_would_be_absurd(tmp_path,
 
 
 def test_multi_path_rm_that_cannot_collapse_still_escalates(tmp_path):
-    """Paths with no bounded common directory still return None -> escalate."""
+    """Paths with no bounded common directory still return None -> escalate.
+
+    Regression: /etc/hosts must count as a real rm operand even though it
+    does not exist on a Windows test host - filtering by os.path.exists()
+    before counting operands used to make this look like a single-target rm
+    and collapse to just the Windows path instead of escalating."""
     a = tmp_path / "a.txt"; a.write_text("1")
     assert recovery.extract_path_operand(f"rm -rf {a} /etc/hosts") is None
+
+
+def test_multi_path_rm_different_drives_escalates():
+    """Two Windows drives have no common path at all (os.path.commonpath
+    raises ValueError) - must escalate, not guess one drive as the target."""
+    assert recovery.extract_path_operand(
+        r"rm -rf C:\Users\alice\data\a.txt D:\backup\b.txt") is None
+
+
+def test_multi_path_rm_in_project_plus_out_of_project_operand(tmp_path):
+    """One operand inside the project tree, one clearly outside it (a
+    sibling directory, not under tmp_path at all). No bounded directory
+    contains both without also containing unrelated content outside the
+    project, and callers (guard.evaluate) additionally refuse anything whose
+    capture root falls outside the configured project root - but
+    extract_path_operand itself must not quietly narrow to just the
+    in-project file when a second, incompatible operand was named."""
+    inside = tmp_path / "project" / "a.txt"
+    inside.parent.mkdir()
+    inside.write_text("1")
+    outside = tmp_path / "elsewhere" / "b.txt"
+    outside.parent.mkdir()
+    outside.write_text("2")
+    result = recovery.extract_path_operand(f"rm -rf {inside} {outside}")
+    # Either honestly escalates, or collapses to a real superset directory
+    # that contains both operands - never to just one of them.
+    if result is not None:
+        assert os.path.commonpath([result, str(inside)]) == result
+        assert os.path.commonpath([result, str(outside)]) == result
+
+
+def test_multi_path_rm_dash_options_ignored_operands_collected(tmp_path):
+    """`-r`, `-f`, and `--force` are options, not operands; every remaining
+    token is still collected before the bounded-directory decision is made."""
+    sub = tmp_path / "victims"; sub.mkdir()
+    a = sub / "a.txt"; a.write_text("1")
+    b = sub / "b.txt"; b.write_text("2")
+    assert recovery.extract_path_operand(f"rm -r -f --force {a} {b}") == str(sub)
 
 
 def test_extract_mv_protects_destination(tmp_path):

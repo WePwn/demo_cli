@@ -34,6 +34,46 @@ from ..context import Intent
 from ..guard import Guard
 
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# Claude Code fires the same PreToolUse shape for both a POSIX shell (Bash) and
+# a Windows one (PowerShell); tool_input.command carries the raw command line
+# either way, so both route through the same command evaluation path.
+_SHELL_TOOLS = {"Bash", "PowerShell"}
+
+_BANNER = "\u2500" * 4
+
+def _stderr(msg: str) -> None:
+    sys.stderr.write(msg + "\n")
+
+def _loud_save(result) -> None:
+    """Unmissable stderr for a captured recovery point (enforce path)."""
+    rid = result.recovery_entry.get("id", "")
+    n = len(getattr(result, "affected_paths", None) or []) or None
+    what = f"{n} files" if n else "target"
+    _stderr("")
+    _stderr(f"demo_cli \u2705 recovery point {rid} captured before this ran ({what}).")
+    _stderr(f"         mistake? undo it with:  demo_cli undo {rid}")
+    try:
+        from ..render import feedback_url_for
+        url = feedback_url_for(result)
+        if url:
+            _stderr(f"         wrong call?  report it (prefilled): {url}")
+    except Exception:
+        pass
+    _stderr("")
+
+def _loud_block(result) -> None:
+    """Unmissable stderr for an escalate/block (enforce path)."""
+    _stderr("")
+    _stderr(f"demo_cli \u26d4 blocked: {result.decision.reason}")
+    _stderr("         nothing was captured, and nothing is claimed to be.")
+    try:
+        from ..render import feedback_url_for
+        url = feedback_url_for(result)
+        if url:
+            _stderr(f"         wrong call?  report it (prefilled): {url}")
+    except Exception:
+        pass
+    _stderr("")
 
 
 def _emit(stdout, permission: str, reason: str) -> None:
@@ -60,16 +100,16 @@ def run_pretooluse(stdin, stdout) -> int:
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     description = tool_input.get("description")
 
-    is_bash = tool_name == "Bash"
+    is_shell = tool_name in _SHELL_TOOLS
     is_file = tool_name in _FILE_TOOLS
-    if not (is_bash or is_file):
-        # Beta scope: gate Bash + file-write tools. Everything else passes.
+    if not (is_shell or is_file):
+        # Beta scope: gate shell + file-write tools. Everything else passes.
         return 0
 
     try:
         cfg = load_config(start=cwd)
         guard = Guard(config=cfg)
-        if is_bash:
+        if is_shell:
             command = (tool_input.get("command") or "").strip()
             if not command:
                 return 0
@@ -109,6 +149,9 @@ def run_pretooluse(stdin, stdout) -> int:
     if result.recovery_entry:
         rid = result.recovery_entry.get("id", "")
         reason += f"  (recovery point {rid}; undo with `demo_cli undo {rid}`)"
+        _loud_save(result)          # <-- make the save FELT, on stderr
+    elif result.decision.is_blocking:
+        _loud_block(result)         # <-- make the block legible, with report link
     _emit(stdout, result.permission, reason)
     return 0
 
@@ -118,13 +161,19 @@ def run_pretooluse(stdin, stdout) -> int:
 # --------------------------------------------------------------------------
 
 _FILE_MATCHER = "Edit|Write|MultiEdit|NotebookEdit"
+# Separate matcher entries (rather than one "Bash|PowerShell" block) so an
+# older Bash-only install upgrades by gaining a new PowerShell block, and so
+# `"Bash" in matchers` stays a valid way to check coverage.
+_SHELL_MATCHERS = ("Bash", "PowerShell")
 
 
 def settings_snippet() -> Dict:
     return {
         "hooks": {
             "PreToolUse": [
-                {"matcher": "Bash", "hooks": [{"type": "command", "command": "demo_cli hook"}]},
+                {"matcher": m, "hooks": [{"type": "command", "command": "demo_cli hook"}]}
+                for m in _SHELL_MATCHERS
+            ] + [
                 {"matcher": _FILE_MATCHER, "hooks": [{"type": "command", "command": "demo_cli hook"}]},
             ]
         }
@@ -150,7 +199,11 @@ def install_into_settings(path: str) -> None:
             for b in pre
         )
 
-    for matcher in ("Bash", _FILE_MATCHER):
+    # Existing Bash-only installs (pre-PowerShell-support) are upgraded here:
+    # the Bash block is left untouched (no duplicate), and the missing
+    # PowerShell block is appended so Windows shell commands start routing
+    # through the hook too.
+    for matcher in (*_SHELL_MATCHERS, _FILE_MATCHER):
         if not _present(matcher):
             pre.append({"matcher": matcher,
                         "hooks": [{"type": "command", "command": "demo_cli hook"}]})

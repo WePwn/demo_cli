@@ -86,6 +86,7 @@ def resolve_target(cmd: str, explicit_db: Optional[str] = None,
 
 _RM_RE = re.compile(r"^\s*(?:sudo\s+)?rm\b", re.I)
 _MV_RE = re.compile(r"^\s*(?:sudo\s+)?mv\b", re.I)
+_PS_REMOVE_RE = re.compile(r"^\s*(?:Remove-Item|ri)\b", re.I)
 
 # Brace expansion. The shell expands `{a,b}` and `{1..3}` BEFORE globbing and
 # *unconditionally* - independent of what exists on disk - so `rm file{1,2,3}.txt`
@@ -205,6 +206,52 @@ def _path_operands(cmd: str) -> List[str]:
     return out
 
 
+_PS_PATH_FLAGS = {"-literalpath", "-path"}
+
+
+def _ps_remove_item_operand(cmd: str) -> Optional[str]:
+    """Conservative PowerShell `Remove-Item` target extraction. Supports:
+
+        Remove-Item -Recurse -Force ".\\victim"
+        Remove-Item -LiteralPath ".\\victim" -Recurse -Force
+        Remove-Item -Path ".\\victim" -Recurse -Force
+
+    Not a shell parser - like `_path_operands`, good enough to find the single
+    target of a simple call. Any flag other than -Path/-LiteralPath is skipped
+    without consuming a value, so a command carrying an unsupported flag with
+    its own argument (e.g. `-ErrorAction Stop`) leaves that argument looking
+    like a second positional operand - deliberately, so it is treated as
+    ambiguous below rather than guessed at. Returns None (never a target) when
+    the operand count is not exactly one, or the operand contains a wildcard:
+    the honesty rule is that a target this function cannot pin down exactly
+    must not be snapshotted at all.
+    """
+    if not _PS_REMOVE_RE.search(cmd):
+        return None
+    tokens = cmd.strip().split()[1:]  # drop the leading Remove-Item / ri
+    targets: List[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.lower() in _PS_PATH_FLAGS:
+            i += 1
+            if i < len(tokens):
+                targets.append(tokens[i].strip("'\""))
+            i += 1
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        targets.append(tok.strip("'\""))
+        i += 1
+    if len(targets) != 1:
+        return None
+    target = targets[0]
+    if not target or any(ch in target for ch in "*?[]"):
+        return None
+    return target
+
+
 def _too_broad(path: str) -> bool:
     """Capture surfaces we refuse however small they measure: the filesystem
     root, a Windows drive root, and $HOME. `rm ~/a ~/b` must never quietly
@@ -288,11 +335,22 @@ def extract_path_operand(cmd: str) -> Optional[str]:
       non-issue; the window only matters if other writes land before undo.
     """
     if _RM_RE.search(cmd):
-        existing = [p for p in _path_operands(cmd) if os.path.exists(p)]
-        if len(existing) == 1:
-            return existing[0]
-        if len(existing) > 1:
-            return _common_capture_root(existing)
+        # Collect every operand BEFORE deciding anything. Filtering to
+        # os.path.exists() first and only then counting was the bug: an
+        # operand that is a real, literal path but happens not to exist on
+        # THIS machine (e.g. a Unix path like /etc/hosts checked from a
+        # Windows host) would silently vanish from the count, so a genuinely
+        # multi-target rm looked like a single-target one and collapsed to
+        # that one target instead of escalating. A non-wildcard operand is a
+        # real rm argument regardless of whether it currently exists; only
+        # wildcard operands are existence-filtered (by the glob expansion
+        # inside _path_operands itself, since a glob that matches nothing
+        # touches nothing).
+        ops = _path_operands(cmd)
+        if len(ops) == 1:
+            return ops[0] if os.path.exists(ops[0]) else None
+        if len(ops) > 1:
+            return _common_capture_root(ops)
         return None
     if _MV_RE.search(cmd):
         ops = _path_operands(cmd)
@@ -302,6 +360,10 @@ def extract_path_operand(cmd: str) -> Optional[str]:
                 return dst
             if os.path.exists(src):
                 return src
+        return None
+    if _PS_REMOVE_RE.search(cmd):
+        target = _ps_remove_item_operand(cmd)
+        return target if target and os.path.exists(target) else None
     return None
 
 

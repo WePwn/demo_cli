@@ -10,10 +10,12 @@ and rationale it happened under.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import json
 import os
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
@@ -29,29 +31,86 @@ def _canon(d: dict) -> str:
     return json.dumps(d, sort_keys=True, separators=(",", ":"))
 
 
-import contextlib
+class ReceiptLockError(RuntimeError):
+    """Raised when the sidecar receipt lock cannot be acquired in time."""
+
+
+# Bounded so a stuck lock fails loudly instead of hanging a hook forever.
+_LOCK_TIMEOUT_SECONDS = float(os.environ.get("DEMO_CLI_LOCK_TIMEOUT", "10"))
+_LOCK_POLL_INTERVAL = 0.05
+
+
+def _acquire(fh) -> None:
+    """Take an exclusive, non-blocking lock on byte 0 of `fh`, retrying until
+    `_LOCK_TIMEOUT_SECONDS` elapses. Raises ReceiptLockError rather than
+    letting a caller proceed unlocked."""
+    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+    if os.name == "nt":
+        import msvcrt
+        while True:
+            try:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise ReceiptLockError(
+                        f"Could not acquire receipt lock on {fh.name!r} "
+                        f"within {_LOCK_TIMEOUT_SECONDS}s.")
+                time.sleep(_LOCK_POLL_INTERVAL)
+    else:
+        import fcntl
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise ReceiptLockError(
+                        f"Could not acquire receipt lock on {fh.name!r} "
+                        f"within {_LOCK_TIMEOUT_SECONDS}s.")
+                time.sleep(_LOCK_POLL_INTERVAL)
+
+
+def _release(fh) -> None:
+    if os.name == "nt":
+        import msvcrt
+        try:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
 def _chain_lock(path: str):
-    """Exclusive lock guarding the read-last-hash / append pair. POSIX flock on
-    a sidecar `.lock`; a no-op where fcntl is unavailable (e.g. Windows)."""
+    """Exclusive lock guarding the read-last-hash / append pair, held across
+    the full critical section (read last hash -> finalize -> append -> flush
+    -> fsync). POSIX uses fcntl.flock; Windows uses msvcrt.locking on one byte
+    of the sidecar `.lock` file. Both sides poll with a bounded retry loop and
+    raise ReceiptLockError instead of silently proceeding unlocked."""
     lock_path = path + ".lock"
     os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+
+    fh = open(lock_path, "a+b")
     try:
-        import fcntl
-    except ImportError:  # pragma: no cover - non-POSIX fallback
-        yield
-        return
-    fh = open(lock_path, "w")
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
+        # msvcrt.locking needs at least one byte to lock; keep it non-empty
+        # either way so byte-0 locking is always well defined.
+        if os.fstat(fh.fileno()).st_size == 0:
+            fh.write(b"\0")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+        _acquire(fh)
         try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            yield
         finally:
-            fh.close()
+            _release(fh)
+    finally:
+        fh.close()
 
 
 def _now() -> str:
@@ -110,10 +169,10 @@ def last_hash(path: str) -> str:
 def append_receipt(path: str, receipt: Receipt) -> Receipt:
     """Chain `receipt` to the log at `path` and persist it.
 
-    The read-last-hash / write pair is held under an exclusive file lock so two
-    agents firing at once cannot interleave and break the chain. The lock is a
-    sidecar file (POSIX flock); on platforms without fcntl it degrades to a
-    best-effort no-op rather than failing.
+    The read-last-hash / finalize / append / flush / fsync sequence is held
+    under a single exclusive cross-platform file lock (see `_chain_lock`) so
+    concurrent writers - threads, or separate processes such as real hooks -
+    cannot read the same last hash and append competing receipts.
     """
     receipt.action_raw = redact(receipt.action_raw)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -123,6 +182,8 @@ def append_receipt(path: str, receipt: Receipt) -> Receipt:
         receipt.finalize()
         with open(path, "a", encoding="utf-8") as f:
             f.write(_canon(asdict(receipt)) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
     return receipt
 
 

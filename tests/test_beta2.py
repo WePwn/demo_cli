@@ -8,6 +8,7 @@ hook         Edit/Write tools route through the file path; new files allow.
 locking      concurrent receipt appends keep the chain intact.
 """
 import json
+import multiprocessing
 import os
 import threading
 
@@ -19,7 +20,8 @@ from demo_cli.decide import (decide, posture, SAFE, REVIEW, BLOCKED,
                              CONTEXT_MISMATCH, ESCALATE)
 from demo_cli.guard import Guard
 from demo_cli import recovery, render
-from demo_cli.receipts import append_receipt, Receipt, verify_chain
+from demo_cli import receipts as receipts_mod
+from demo_cli.receipts import append_receipt, Receipt, load_receipts, verify_chain
 from demo_cli.hooks.claude_code import run_pretooluse, settings_snippet
 import io
 
@@ -151,25 +153,98 @@ def test_settings_snippet_has_both_matchers():
     assert any("Edit" in m for m in matchers)
 
 
-# --- concurrency -----------------------------------------------------------
+# --- concurrency -------------------------------------------------------------
+#
+# receipts.py uses a cross-platform sidecar-file lock (fcntl.flock on POSIX,
+# msvcrt.locking on Windows, see demo_cli.receipts._chain_lock) to hold the
+# read-last-hash / finalize / append / flush / fsync sequence as one atomic
+# critical section. These tests prove that holds under both thread and
+# process concurrency, and that a lock that can't be acquired fails loudly
+# rather than writing an unlocked (and therefore chain-breaking) receipt.
 
-def test_concurrent_appends_keep_chain_intact(tmp_path):
-    path = str(tmp_path / "receipts.jsonl")
+def _append_n(path, n):
+    for _ in range(n):
+        append_receipt(path, Receipt(
+            action_raw="x", action_type="shell", target_environment="dev",
+            decision="ALLOW", reason="r", mode="shadow"))
 
-    def worker():
-        for _ in range(10):
-            append_receipt(path, Receipt(
-                action_raw="x", action_type="shell", target_environment="dev",
-                decision="ALLOW", reason="r", mode="shadow"))
 
-    threads = [threading.Thread(target=worker) for _ in range(4)]
+def _assert_valid_linear_chain(path, expected_entries):
+    v = verify_chain(path)
+    assert v.ok, v.detail
+    assert v.entries == expected_entries
+
+    rows = load_receipts(path)
+    assert len(rows) == expected_entries  # no receipt was lost
+
+    prev_hashes = [r["prev_receipt_hash"] for r in rows]
+    assert len(prev_hashes) == len(set(prev_hashes)), (
+        "two receipts claim the same previous head")
+
+
+@pytest.mark.parametrize("run", range(3))  # repeatedly, to catch flakiness
+def test_concurrent_appends_keep_chain_intact(tmp_path, run):
+    path = str(tmp_path / f"receipts_{run}.jsonl")
+
+    threads = [threading.Thread(target=_append_n, args=(path, 10)) for _ in range(4)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    v = verify_chain(path)
-    assert v.ok, v.detail
-    assert v.entries == 40
+
+    _assert_valid_linear_chain(path, expected_entries=40)
+
+
+def _mp_worker(path, n):
+    # Separate process, so this must be a module-level function to pickle
+    # cleanly under the (Windows-default) spawn start method.
+    _append_n(path, n)
+
+
+def test_concurrent_process_appends_keep_chain_intact(tmp_path):
+    # Real hooks fire from separate `demo_cli` process invocations, not
+    # threads within one interpreter - prove the lock is actually inter-
+    # process, not just thread-safe within a single process.
+    path = str(tmp_path / "receipts_mp.jsonl")
+
+    procs = [multiprocessing.Process(target=_mp_worker, args=(path, 5))
+             for _ in range(4)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=60)
+    for p in procs:
+        assert p.exitcode == 0, f"worker process failed: exitcode={p.exitcode}"
+
+    _assert_valid_linear_chain(path, expected_entries=20)
+
+
+def test_lock_contention_times_out_without_writing_unlocked_receipt(tmp_path, monkeypatch):
+    path = str(tmp_path / "receipts_contend.jsonl")
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+
+    monkeypatch.setattr(receipts_mod, "_LOCK_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(receipts_mod, "_LOCK_POLL_INTERVAL", 0.05)
+
+    # Hold the real lock (same primitive append_receipt uses) from outside,
+    # so the next append genuinely cannot acquire it.
+    holder = open(lock_path, "a+b")
+    if os.fstat(holder.fileno()).st_size == 0:
+        holder.write(b"\0")
+        holder.flush()
+    receipts_mod._acquire(holder)
+    try:
+        with pytest.raises(receipts_mod.ReceiptLockError):
+            append_receipt(path, Receipt(
+                action_raw="x", action_type="shell", target_environment="dev",
+                decision="ALLOW", reason="r", mode="shadow"))
+    finally:
+        receipts_mod._release(holder)
+        holder.close()
+
+    # No unlocked receipt was written - the file is either absent or empty.
+    assert not os.path.exists(path) or os.path.getsize(path) == 0
 
 
 # --- 0.4.0b3: plain rm must be gated, not only rm -rf -----------------------
