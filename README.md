@@ -346,7 +346,7 @@ legitimate override; an agent cannot forge it.
 **Out of scope for this beta:**
 - Adversarial agents deliberately evading classification
 - Reversing already-sent external effects
-- Multi-agent concurrent sessions (receipt locking is POSIX; Windows degrades to best-effort)
+- Reversing an action after it has already been undone once (single undo depth per recovery point)
 - Adapters for agents other than Claude Code and Cursor (Aider, Cline, planned)
 
 ---

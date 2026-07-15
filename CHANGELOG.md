@@ -2,6 +2,8 @@
 
 ## 0.4.0b7 - Windows: PowerShell hook coverage + honest Remove-Item recovery
 
+**Also fixed - receipt-chain locking was POSIX-only (fcntl), a silent no-op on Windows**, so concurrent writers could fork the tamper-evident chain. Replaced with a cross-platform sidecar lock (msvcrt.locking on Windows, fcntl.flock on POSIX) held across the whole read-hash to append to fsync section, with bounded retry and a ReceiptLockError rather than an unlocked write. Verified under 4 threads x 10 receipts and separate spawned processes.
+
 Confirmed real-world failure: Claude Code on Windows fired
 `Remove-Item -Recurse -Force ".\victim"` under `tool_name="PowerShell"`. The
 folder was deleted with **no receipt and no recovery point** - the debug log
