@@ -77,14 +77,15 @@ _ISSUE_BASE = "https://github.com/WePwn/demo_cli/issues/new"
 _FEEDBACK_ON = {ESCALATE, CONTEXT_MISMATCH, REVERSIBLE, DRY_RUN}
 
 
-def feedback_line(r: "GuardResult") -> str:
-    """One consent-based line inviting a wrong-call report via a prefilled
-    GitHub issue. Returns '' when the decision isn't one worth asking about.
+def feedback_url_for(r: "GuardResult") -> str:
+    """The prefilled GitHub-issue URL for a wrong-call report, or '' if the
+    decision isn't one worth asking about. Shared by the interactive `check`
+    path and the hook stderr path so the feedback channel lives where users
+    actually are (the hook), not only where they rarely are (manual `check`).
     """
     d = r.decision
     if d.decision not in _FEEDBACK_ON:
         return ""
-
     title = f"Wrong call: {d.decision} on `{(r.command or '')[:60]}`"
     body = (
         "**What demo_cli decided**\n"
@@ -98,8 +99,14 @@ def feedback_line(r: "GuardResult") -> str:
         "**My .demo_cli.toml** (redact credentials)\n"
         "```toml\n\n```\n"
     )
-    url = f"{_ISSUE_BASE}?" + _urlparse.urlencode({"title": title, "body": body})
-    # Keep the visible line short; the long prefilled URL rides in the link.
+    return f"{_ISSUE_BASE}?" + _urlparse.urlencode({"title": title, "body": body})
+
+
+def feedback_line(r: "GuardResult") -> str:
+    """One consent-based line inviting a wrong-call report (interactive path)."""
+    url = feedback_url_for(r)
+    if not url:
+        return ""
     return c("  Wrong call? ", "dim") + c("→ report it (prefilled): ", "dim") + url
 
 

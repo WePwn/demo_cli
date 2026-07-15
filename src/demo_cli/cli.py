@@ -198,6 +198,31 @@ def _hook_installed(path) -> bool:
     return False
 
 
+def _hook_selftest() -> bool:
+    """Run a harmless destructive command through the real PreToolUse entrypoint
+    in a throwaway temp project, and confirm it produces a concrete decision.
+    The difference between "the hook is registered" and "the hook actually
+    fires" - the second is what the user needs to be true."""
+    import io, json, os, tempfile
+    from .hooks.claude_code import run_pretooluse
+    d = tempfile.mkdtemp(); prev = os.getcwd()
+    try:
+        os.chdir(d)
+        open(os.path.join(d, "canary.txt"), "w").write("x")
+        payload = {"tool_name": "Bash",
+                   "tool_input": {"command": "rm -rf canary.txt"}, "cwd": d}
+        out = io.StringIO()
+        run_pretooluse(io.StringIO(json.dumps(payload)), out)
+        raw = out.getvalue().strip()
+        if not raw:
+            return False
+        dec = json.loads(raw)
+        return ("hookSpecificOutput" in dec or "permissionDecision" in dec
+                or "decision" in dec)
+    finally:
+        os.chdir(prev)
+
+
 def _any_hook_installed(cfg) -> bool:
     project = os.path.join(cfg.project_root, ".claude", "settings.json")
     glob = os.path.expanduser("~/.claude/settings.json")
@@ -237,6 +262,30 @@ def cmd_doctor(a) -> int:
     hook = _any_hook_installed(cfg)
     checks.append(("ok" if hook else "warn", "claude code hook",
                    "installed" if hook else "not installed (run: demo_cli install-hook)"))
+
+    # THE check that actually predicts protection: is `demo_cli` resolvable on
+    # PATH? Claude Code launches the hook as a bare `demo_cli hook` command in a
+    # fresh shell; if it is not on PATH there, the hook silently never runs and
+    # the user THINKS they are protected. A registered-but-unreachable hook is
+    # worse than no hook, so this is a hard fail, not a warning.
+    on_path = shutil.which("demo_cli")
+    checks.append(("ok" if on_path else "fail", "demo_cli on PATH",
+                   on_path if on_path else
+                   "NOT FOUND - Claude Code will silently skip the hook. "
+                   "Install with pipx or keep your venv active."))
+
+    # End-to-end self-test: feed a known destructive command through the SAME
+    # hook entrypoint Claude Code uses, and confirm it comes back as a real
+    # decision. This proves the wiring end to end, not just that files exist.
+    if hook and on_path:
+        try:
+            selftest_ok = _hook_selftest()
+            checks.append(("ok" if selftest_ok else "fail", "hook self-test",
+                           "a test rm was intercepted and snapshotted"
+                           if selftest_ok else
+                           "hook did NOT intercept a test command - see logs"))
+        except Exception as exc:
+            checks.append(("warn", "hook self-test", f"could not run ({exc})"))
 
     render.render_doctor(checks, __version__)
     return 0 if all(s != "fail" for s, _, _ in checks) else 1

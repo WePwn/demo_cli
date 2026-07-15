@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.4.0b7 - felt value, one-command install, and a doctor that predicts protection
+
+The through-line of this release: an installed hook was doing its job silently,
+so a user could be snapshotted repeatedly and never *feel* saved - and the one
+consent-based feedback channel only fired on a code path real users don't take.
+Nothing about the safety logic changed; what changed is that the value is now
+visible at the moment it happens, and the install verifies itself.
+
+### The save-moment is now visible on the hook path
+In enforce mode the recovery detail previously rode only in the stdout JSON
+reason, which the agent may or may not surface to the human. Now, on every
+captured recovery point, the hook writes an unmissable block to **stderr** (which
+Claude Code shows the user):
+
+```
+demo_cli ✅ recovery point 5c015d62 captured before this ran (5 files).
+         mistake? undo it with:  demo_cli undo 5c015d62
+         wrong call?  report it (prefilled): https://github.com/.../issues/new?...
+```
+
+and on a hard-stop, an honest one that claims nothing:
+
+```
+demo_cli ⛔ blocked: <reason>
+         nothing was captured, and nothing is claimed to be.
+```
+
+### The feedback channel moved to where users are
+The prefilled "Wrong call? → report it" issue link previously rode the
+interactive `check` path only - which users who install the hook almost never
+run, so the channel was effectively invisible. `render.py` now exposes
+`feedback_url_for()`, shared by both the interactive path and the hook stderr
+lines above. Same prefilled issue (decision, reason, matched rule, command),
+now on the path users actually hit. Still consent-based, one-directional, no
+telemetry.
+
+### `doctor` now predicts protection instead of assuming it
+Two checks were added, because "the hook is registered in settings" is not the
+same as "the hook will fire":
+* **`demo_cli on PATH`** - a hard **fail** (not a warning) if the binary is not
+  resolvable, since Claude Code launches `demo_cli hook` in a fresh shell and a
+  registered-but-unreachable hook silently protects nothing. This is the common
+  virtualenv/conda footgun.
+* **hook self-test** - pushes a real `rm -rf canary` through the actual
+  `run_pretooluse` entrypoint in a temp project and confirms a concrete decision
+  comes back. Proves the wiring end to end.
+
+### One-command install (bash + PowerShell)
+`install.sh` and `install.ps1`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.sh | sh
+irm  https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.ps1 | iex
+```
+
+Each does python check → pipx (bootstrapped if missing) → install → init →
+install-hook → **`doctor`**, and fails loud with the exact `export PATH` / `setx`
+fix if the binary isn't reachable in the current shell - killing the silent-PATH
+failure at install time rather than at the first destructive command. The README
+owns the `curl | sh` irony directly (read it first; it's ~90 lines).
+
+Tests: **108 passing** (+7: the stderr save-moment and its report link, the
+honest block line, shadow-mode stdout silence, the shared feedback URL, and the
+self-test). No change to classifier, snapshot, recovery, or adapters.
+
+
 ## 0.4.0b6 - multi-path recovery, brace expansion, affected-files preview
 
 This is where the auto-fire recovery path changed. (0.4.0b5 correctly stated

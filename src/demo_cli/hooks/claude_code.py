@@ -35,6 +35,42 @@ from ..guard import Guard
 
 _FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
+_BANNER = "\u2500" * 4
+
+def _stderr(msg: str) -> None:
+    sys.stderr.write(msg + "\n")
+
+def _loud_save(result) -> None:
+    """Unmissable stderr for a captured recovery point (enforce path)."""
+    rid = result.recovery_entry.get("id", "")
+    n = len(getattr(result, "affected_paths", None) or []) or None
+    what = f"{n} files" if n else "target"
+    _stderr("")
+    _stderr(f"demo_cli \u2705 recovery point {rid} captured before this ran ({what}).")
+    _stderr(f"         mistake? undo it with:  demo_cli undo {rid}")
+    try:
+        from ..render import feedback_url_for
+        url = feedback_url_for(result)
+        if url:
+            _stderr(f"         wrong call?  report it (prefilled): {url}")
+    except Exception:
+        pass
+    _stderr("")
+
+def _loud_block(result) -> None:
+    """Unmissable stderr for an escalate/block (enforce path)."""
+    _stderr("")
+    _stderr(f"demo_cli \u26d4 blocked: {result.decision.reason}")
+    _stderr("         nothing was captured, and nothing is claimed to be.")
+    try:
+        from ..render import feedback_url_for
+        url = feedback_url_for(result)
+        if url:
+            _stderr(f"         wrong call?  report it (prefilled): {url}")
+    except Exception:
+        pass
+    _stderr("")
+
 
 def _emit(stdout, permission: str, reason: str) -> None:
     stdout.write(json.dumps({
@@ -109,6 +145,9 @@ def run_pretooluse(stdin, stdout) -> int:
     if result.recovery_entry:
         rid = result.recovery_entry.get("id", "")
         reason += f"  (recovery point {rid}; undo with `demo_cli undo {rid}`)"
+        _loud_save(result)          # <-- make the save FELT, on stderr
+    elif result.decision.is_blocking:
+        _loud_block(result)         # <-- make the block legible, with report link
     _emit(stdout, result.permission, reason)
     return 0
 
