@@ -27,16 +27,21 @@ Say ("  python  " + (& $py -c "import sys;print('%d.%d'%sys.version_info[:2])" 2
 
 if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
   Warn "  pipx not found - installing it"
-  & $py -m pip install --user -q pipx
-  & $py -m pipx ensurepath | Out-Null
+  $ErrorActionPreference = "Continue"
+  & $py -m pip install --user -q pipx 2>&1 | Out-Null
+  & $py -m pipx ensurepath 2>&1 | Out-Null
+  $ErrorActionPreference = "Stop"
   $userbase = & $py -c "import site;print(site.getuserbase())"
   $scripts  = Join-Path $userbase "Scripts"
   if (Test-Path $scripts) { $env:Path = "$scripts;$env:Path" }
 }
 Say "  installing demo_cli (pipx)..."
 $src = if ($env:DEMO_CLI_LOCAL) { $env:DEMO_CLI_LOCAL } else { "git+https://github.com/WePwn/demo_cli.git@beta" }
-try { pipx install --force $src 2>&1 | Out-Null }
-catch { Die "pipx install failed - try:  pipx install $src" }
+$ErrorActionPreference = "Continue"
+pipx install --force $src 2>&1 | Out-Null
+$code = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($code -ne 0) { Die "pipx install failed - try:  pipx install $src" }
 
 if (-not (Get-Command demo_cli -ErrorAction SilentlyContinue)) {
   $bin = (pipx environment --value PIPX_BIN_DIR) 2>$null
@@ -53,8 +58,11 @@ if (-not (Get-Command demo_cli -ErrorAction SilentlyContinue)) {
 OK ("  demo_cli on PATH: " + (Get-Command demo_cli).Source)
 
 Say "  wiring into this project..."
+$ErrorActionPreference = "Continue"
 demo_cli init 2>&1 | Out-Null
-try { demo_cli install-hook 2>&1 | Out-Null } catch { Warn "  install-hook: is .claude\settings.json writable?" }
+demo_cli install-hook 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { Warn "  install-hook: is .claude\settings.json writable?" }
+$ErrorActionPreference = "Stop"
 
 Say ""
 demo_cli doctor
