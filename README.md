@@ -17,16 +17,32 @@ The whole design in one line: **recovery is the default; blocking is the fallbac
 Default mode is observe-only: it logs what it *would* have caught and touches nothing. Run it a week on a low-stakes project, read the receipts, then decide whether to let it act.
 
 ```bash
-pipx install git+https://github.com/WePwn/demo_cli.git@beta
-demo_cli init        # shadow mode by default, observes, never blocks
-demo_cli doctor      # verify the install
+# one line: installs, wires the hook, and verifies it actually fires
+curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.sh | sh
 ```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.ps1 | iex
+```
+
+It ends by running `demo_cli doctor`, which fails **loud** if the hook is
+installed but not reachable on your PATH — the one case where Claude Code would
+otherwise skip protection silently. (Yes, it's `curl | sh`, the exact
+opaque-execution pattern demo_cli itself escalates. Read it first, it's ~90
+lines: [install.sh](install.sh).) Prefer to do it by hand? See
+[Install](#install) below.
 
 ### Why you can trust it
 
 - **No telemetry, it phones nobody.** Verify it yourself: `grep -rn "requests\|urllib\|http\|socket" src/`
 - **One small, readable, MIT-licensed codebase**, read exactly what it does before you run it.
 - **Tamper-evident receipts**, every decision is hash-chained and independently verifiable (`demo_cli verify`).
+
+When it captures a recovery point, the hook prints it where you can see it — the
+snapshot id, the one-line undo, and (on a wrong call) a prefilled report link.
+No telemetry: the only signal it ever sends is the one you choose to send by
+clicking. If it saves you something, a ⭐ on the repo is how it survives.
 
 ### "Why not just use git / Claude Code checkpoints?"
 
@@ -162,8 +178,19 @@ Scope for this beta: the Cursor adapter gates **shell commands** only
 
 ## Install
 
-**With pipx (recommended)**, puts `demo_cli` in your global PATH so Claude
-Code can find it from any project directory:
+**One command (recommended).** Installs via pipx (bootstrapping pipx if needed),
+wires the hook into the current project, and runs `doctor` to confirm the hook
+actually fires:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.sh | sh
+```
+```powershell
+irm https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.ps1 | iex
+```
+
+**With pipx (manual).** Puts `demo_cli` in your global PATH so Claude Code can
+find it from any project directory:
 
 ```bash
 pipx install git+https://github.com/WePwn/demo_cli.git@beta
@@ -391,7 +418,6 @@ print(result.permission)          # allow
 ```bash
 pip install -e ".[dev]"
 pytest -q
-# 101 tests, passing on Python 3.9 – 3.14
 ```
 
 ---
