@@ -10,7 +10,7 @@ remote  a managed/remote Postgres URL is a non-recoverable surface.
 import os
 
 from demo_cli.classify import classify_pipeline
-from demo_cli.decide import decide, ESCALATE, SANDBOX
+from demo_cli.decide import decide, ESCALATE
 from demo_cli import recovery
 
 

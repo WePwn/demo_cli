@@ -88,11 +88,14 @@ def _emit(stdout, permission: str, reason: str) -> None:
 
 
 def run_pretooluse(stdin, stdout) -> int:
-    # Fail-open on our own parsing errors: never brick the agent.
+    # Fail-open on our own parsing errors: never brick the agent. But fail-open
+    # LOUD - surface it on stderr so the user can see the tool stepped aside
+    # rather than silently allowing.
     try:
         raw = stdin.read()
         data = json.loads(raw) if raw.strip() else {}
-    except Exception:
+    except Exception as exc:
+        sys.stderr.write(f"demo_cli: could not parse hook input, stepping aside ({exc})\n")
         return 0
 
     tool_name = data.get("tool_name")

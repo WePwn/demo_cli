@@ -1,6 +1,6 @@
 # demo_cli one-command install (Windows / PowerShell).
 #
-#   irm https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/WePwn/demo_cli/v0.4.0-beta.8/install.ps1 | iex
 #
 # Yes, this is irm-pipe-iex. demo_cli's whole point is that you read code
 # before you run it - so read this first. It does four things: install, init,
@@ -36,7 +36,7 @@ if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
   if (Test-Path $scripts) { $env:Path = "$scripts;$env:Path" }
 }
 Say "  installing demo_cli (pipx)..."
-$src = if ($env:DEMO_CLI_LOCAL) { $env:DEMO_CLI_LOCAL } else { "git+https://github.com/WePwn/demo_cli.git@beta" }
+$src = if ($env:DEMO_CLI_LOCAL) { $env:DEMO_CLI_LOCAL } else { "git+https://github.com/WePwn/demo_cli.git@v0.4.0-beta.8" }
 $ErrorActionPreference = "Continue"
 pipx install --force $src 2>&1 | Out-Null
 $code = $LASTEXITCODE

@@ -24,7 +24,7 @@ from .classify import Classification, classify_pipeline, is_sql_preview_candidat
 from .config import Config, load_config
 from .context import Context, Intent, build_context, compare_intent
 from .decide import (ALLOW, ASK, BLOCKING, CONTEXT_MISMATCH, DRY_RUN, ESCALATE,
-                     REVERSIBLE, SANDBOX, Decision, decide)
+                     REVERSIBLE, Decision, decide)
 from .receipts import Receipt, append_receipt
 
 

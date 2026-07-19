@@ -17,7 +17,7 @@ Public surface:
 """
 from .version import __version__
 from .classify import Classification, classify, classify_pipeline
-from .decide import Decision, decide, ALLOW, DRY_RUN, REVERSIBLE, CONTEXT_MISMATCH, SANDBOX, ESCALATE
+from .decide import Decision, decide, ALLOW, DRY_RUN, REVERSIBLE, CONTEXT_MISMATCH, ESCALATE
 from .config import Config, load_config
 from .guard import Guard, GuardResult
 
@@ -36,6 +36,5 @@ __all__ = [
     "DRY_RUN",
     "REVERSIBLE",
     "CONTEXT_MISMATCH",
-    "SANDBOX",
     "ESCALATE",
 ]

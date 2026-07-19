@@ -1,7 +1,7 @@
 """These tests pin the safety invariant: no false recovery, fail-closed."""
 from demo_cli.classify import classify_pipeline
 from demo_cli.decide import (ALLOW, CONTEXT_MISMATCH, DRY_RUN, ESCALATE,
-                             REVERSIBLE, SANDBOX, decide)
+                             REVERSIBLE, decide)
 
 
 def _c(cmd):
@@ -39,9 +39,11 @@ def test_sql_delete_with_preview_is_dry_run():
     assert "42" in d.reason
 
 
-def test_low_blast_env_is_sandbox():
+def test_low_blast_env_still_escalates_when_unrecoverable():
+    # Escalate everywhere: an unrecoverable mutation is NOT waved through on a
+    # dev/staging label. There is no SANDBOX low-blast exception any more.
     d = decide(_c("rm -rf ./build"), "development", recovery_captured=False)
-    assert d.decision == SANDBOX
+    assert d.decision == ESCALATE
 
 
 def test_remote_exec_escalates_even_with_recovery():

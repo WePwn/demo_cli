@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.0b8 - honesty + release hardening
+
+* **The shared-receipt install command is pinned to the release tag.** A
+  `receipt --share` card tells the recipient how to verify the hash chain
+  themselves; that command still pointed at `@beta`, the moving branch the
+  README explicitly warns against. It now derives the tag from the package
+  version via `version.release_tag()` (`0.4.0b8` → `v0.4.0-beta.8`), so a
+  stranger verifies against exactly the code the receipt was written by, and
+  the command follows the next version bump instead of going stale. Locked by
+  a regression test — this was previously unasserted, which is how it survived.
+* **Fixed a self-defeating trust check in the README.** The no-telemetry claim
+  invited readers to run `grep -rn "requests\|urllib\|http\|socket" src/`,
+  which *returns hits*: `urllib.parse` is imported twice for pure string
+  handling (building the prefilled issue link; reading a hostname out of a DB
+  connection string to tell local from remote). The grep now covers actual
+  network I/O (`urlopen`, `requests`, `httpx`, `socket`, `http.client`) and
+  returns nothing, with the two benign `urllib.parse` uses named explicitly
+  rather than hidden.
+* **Corrected the opening comparison.** The README claimed Claude Code and
+  Cursor "neither snapshot first." Their checkpointing *does* cover the agent's
+  own file edits; what it does not cover is shell commands and databases. The
+  line now says that, which is both accurate and the actual gap.
+* **Relicensed to MIT.** The project is now MIT-licensed across `LICENSE`,
+  `pyproject.toml`, and the README (previously Apache-2.0). MIT is more
+  permissive and drops Apache-2.0's explicit patent grant.
+* **Escalate everywhere: removed the SANDBOX low-blast exception.** An
+  unrecoverable, non-recursive mutation in a `development`/`test`/`sandbox`/
+  `staging` workspace previously returned `SANDBOX` (posture SAFE) and proceeded
+  with no recovery point. It now escalates like everywhere else — an
+  unrecoverable mutation is never waved through on the strength of an environment
+  label. The stated invariant ("recoverable or escalate") is now true without
+  exception. The `SANDBOX` disposition is gone.
+* **Install is pinned to a release tag, not the moving `beta` branch.** The
+  recommended path is manual and verify-first (read source + confirm the
+  published SHA-256 before anything runs). `install.sh` / `install.ps1` and every
+  README install snippet now reference `v0.4.0-beta.8`. `curl | sh` remains
+  available but is clearly labelled convenience, not the safe path.
+* **Corrected the recovery-demo caption.** It previously implied the referenced
+  incident's files were "gone for good"; file-carving tools recover *some*
+  fraction. The caption now states the honest case — carving is partial and luck,
+  a recovery point taken *before* the command restores exactly the captured state.
+* **Fail-open is now loud on every path.** A bug in demo_cli must never brick the
+  agent, so the hook fails open on its own internal errors — but the one
+  remaining silent path (unparseable hook input) now writes a visible stderr
+  warning instead of a silent allow. Decisions themselves remain fail-closed.
+* **Documented two standing limitations** in the README: shell parsing is
+  pattern-based (a full command AST is roadmap; ambiguous parses are treated as
+  unrecoverable), and database coverage is SQLite + Postgres only (other engines
+  escalate rather than being captured).
+* **Added `SECURITY.md`** with a responsible-disclosure contact.
+* **Windows drive-letter detection is now cross-platform** (via `ntpath`), so a
+  multi-drive delete is recognised as having no common capture root on any host,
+  and the corresponding test runs everywhere instead of being Windows-only.
+
 ## 0.4.0b7 - Windows: PowerShell hook coverage + honest Remove-Item recovery
 
 **Also fixed - receipt-chain locking was POSIX-only (fcntl), a silent no-op on Windows**, so concurrent writers could fork the tamper-evident chain. Replaced with a cross-platform sidecar lock (msvcrt.locking on Windows, fcntl.flock on POSIX) held across the whole read-hash to append to fsync section, with bounded retry and a ReceiptLockError rather than an unlocked write. Verified under 4 threads x 10 receipts and separate spawned processes.

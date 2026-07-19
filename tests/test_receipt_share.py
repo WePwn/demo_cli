@@ -72,3 +72,33 @@ def test_feedback_line_only_on_wrong_call_worthy():
     esc = Guard(mode="enforce").evaluate("rmdir /s /q C:\\proj")
     line = feedback_line(esc)
     assert "issues/new" in line and "Wrong call" in line
+
+
+def test_share_card_install_command_is_pinned_not_a_moving_branch():
+    """A shared receipt hands a stranger an install command. It must point at
+    the immutable release tag, never at `@beta` - otherwise the recipient
+    verifies a chain with whatever code happens to be on the branch today,
+    which is the exact thing the README tells people not to do."""
+    import tempfile, os
+    from demo_cli.receipts import Receipt, append_receipt, find_receipt, share_card
+    from demo_cli.version import release_tag
+
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "receipts.jsonl")
+        append_receipt(p, Receipt(
+            action_raw="rm -rf ./build", action_type="shell",
+            target_environment="development", decision="REVERSIBLE",
+            reason="snapshotted first", mode="enforce", matched_rule="rm_rf",
+            recovery_point="/x/.demo_cli/rp.tar"))
+        card = share_card(find_receipt(p))
+
+    assert "@beta" not in card, "share card must not point at the moving branch"
+    assert f"@{release_tag()}" in card
+
+
+def test_release_tag_matches_version():
+    """0.4.0b8 -> v0.4.0-beta.8, so pinned commands follow the version bump."""
+    from demo_cli.version import release_tag, __version__
+    tag = release_tag()
+    assert tag.startswith("v")
+    assert "beta" in tag or "b" not in __version__

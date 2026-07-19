@@ -75,7 +75,7 @@ _DESTRUCTIVE = [(rid, a, re.compile(rx, re.I | re.S)) for rid, a, rx in _DESTRUC
 # can never truthfully cover them, so they are treated as non-recoverable
 # surfaces and escalated regardless of the local environment label. (Trou 1:
 # without this, a force-push or terraform destroy in a project whose env
-# resolves to "development" was downgraded to SANDBOX and allowed unattended.)
+# resolves to "development" would be allowed unattended.)
 # Local destructive rules (rm/mv/reset --hard/shred/...) are intentionally NOT
 # here - those are recoverable by a local snapshot.
 _EXTERNAL_IRREVERSIBLE = {
@@ -90,11 +90,12 @@ _EXTERNAL_IRREVERSIBLE = {
 # Local destructive commands this tool cannot honestly make reversible as built.
 # `rmdir /s` and `del /s|/f` remove a whole tree with no recycle bin, and the
 # operand extractor does not resolve their target, so no recovery point is ever
-# captured. Left as ordinary local deletes they would slip through the
-# low-blast SANDBOX path in a dev/test/staging environment - exactly where an
-# agent runs. Marking them as a non-recoverable surface makes the decision
-# engine escalate them in EVERY environment: a real hard-stop, matching what we
-# state publicly. A human structural-approval token remains the one legitimate
+# captured. Left unmarked they would be treated as ordinary local deletes -
+# exactly the case an agent hits in a dev/test/staging workspace. Marking them
+# as a non-recoverable surface makes the decision engine escalate them in EVERY
+# environment with an honest reason and the structural-approval override: a real
+# hard-stop, matching what we state publicly. A human structural-approval token
+# remains the one legitimate
 # override (an agent cannot forge it), consistent with the external
 # non-recoverable surfaces above.
 #
@@ -104,8 +105,9 @@ _EXTERNAL_IRREVERSIBLE = {
 # it can be honestly recoverable. This module has no filesystem access (it only
 # describes the command), so it cannot know in advance whether that snapshot
 # will succeed - decide.py is where the still-unrecovered case (missing,
-# ambiguous, multi-drive, or out-of-root target) is kept a hard-stop in every
-# environment rather than falling through to SANDBOX.
+# ambiguous, multi-drive, or out-of-root target) escalates as a hard-stop in
+# every environment, since an unrecoverable mutation is never waved through on
+# the strength of an environment label.
 _LOCAL_UNRECOVERABLE = {
     "rmdir_s": "recursive_force_delete",
     "del_force": "recursive_force_delete",
@@ -259,7 +261,7 @@ def _classify_segment(cmd: str) -> dict:
     if surface is None and matched in _EXTERNAL_IRREVERSIBLE:
         surface = _EXTERNAL_IRREVERSIBLE[matched]
     # Local recursive-force deletes we cannot honestly recover: escalate in every
-    # environment rather than let the SANDBOX path wave them through in dev.
+    # environment (there is no low-blast exception that could wave them through).
     if surface is None and matched in _LOCAL_UNRECOVERABLE:
         surface = _LOCAL_UNRECOVERABLE[matched]
 

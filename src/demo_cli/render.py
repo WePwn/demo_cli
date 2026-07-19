@@ -10,7 +10,7 @@ import sys
 from typing import List
 
 from .context import redact
-from .decide import (ALLOW, CONTEXT_MISMATCH, DRY_RUN, ESCALATE, REVERSIBLE, SANDBOX,
+from .decide import (ALLOW, CONTEXT_MISMATCH, DRY_RUN, ESCALATE, REVERSIBLE,
                      SAFE, REVIEW, BLOCKED, posture)
 from .diff import DiffLine
 from .guard import GuardResult
@@ -28,7 +28,7 @@ _C = {
 
 _DECISION_COLOR = {
     ALLOW: "green", DRY_RUN: "yellow", REVERSIBLE: "yellow",
-    CONTEXT_MISMATCH: "red", SANDBOX: "green", ESCALATE: "red",
+    CONTEXT_MISMATCH: "red", ESCALATE: "red",
     "RESTORED": "green", "VERIFIED": "green", "TAMPERED": "red", "DIFF": "cyan",
 }
 _TONE_COLOR = {"add": "green", "del": "red", "mod": "yellow", "meta": "cyan", "info": "dim"}

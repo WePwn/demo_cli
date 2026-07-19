@@ -1,6 +1,6 @@
 # demo_cli
 
-**Claude Code and Cursor *ask* you to confirm dangerous commands, or *block* them. Neither snapshots first, and their undo doesn't cover shell commands or databases.**
+**Claude Code and Cursor *ask* you to confirm dangerous commands, or *block* them. Their checkpoints cover the agent's own file edits — not shell commands or databases, which is where the destructive ones live.**
 
 demo_cli snapshots the real target **before** a destructive command runs, so a wrong call is reversible with one command. **Confirming ≠ recovering.**
 
@@ -10,20 +10,21 @@ The whole design in one line: **recovery is the default; blocking is the fallbac
 
 ![demo_cli snapshots before an agent's rm, lets it run, and undoes it in one command](https://cdn.wepwn.ma/images/demo/demo_recover.gif)
 
-*A real session. The agent's delete is **not** blocked, it runs, the files really are gone, and one command brings them back. This is [claude-code#76626](https://github.com/anthropics/claude-code/issues/76626): an agent ran `rm -f Reports/report_*.txt Reports/report_*.png` intending only to count the files. That user's screenshots, referenced across 57 open tickets, are gone for good. Not in the recycle bin (no CLI delete ever is), not in git, not in a shadow copy.*
+*A real session. The agent's delete is **not** blocked, it runs, the files really are gone, and one command brings them back. It echoes [claude-code#76626](https://github.com/anthropics/claude-code/issues/76626), where an agent ran `rm -f Reports/report_*.txt Reports/report_*.png` intending only to count the files. A CLI delete never lands in the recycle bin, and if the files aren't in git the only paths left are luck and file-carving tools like Recuva, which recover some fraction, not reliably all. A recovery point taken **before** the command removes the guesswork: it restores exactly the captured state.*
 
 ### Start in shadow mode, it changes nothing
 
 Default mode is observe-only: it logs what it *would* have caught and touches nothing. Run it a week on a low-stakes project, read the receipts, then decide whether to let it act.
 
 ```bash
-# one line: installs, wires the hook, and verifies it actually fires
-curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.sh | sh
+# one line: installs, wires the hook, and verifies it actually fires.
+# pinned to a release tag, not the moving beta branch. read it first: install.sh
+curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/v0.4.0-beta.8/install.sh | sh
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.ps1 | iex
+irm https://raw.githubusercontent.com/WePwn/demo_cli/v0.4.0-beta.8/install.ps1 | iex
 ```
 
 It ends by running `demo_cli doctor`, which fails **loud** if the hook is
@@ -35,7 +36,12 @@ lines: [install.sh](install.sh).) Prefer to do it by hand? See
 
 ### Why you can trust it
 
-- **No telemetry, it phones nobody.** Verify it yourself: `grep -rn "requests\|urllib\|http\|socket" src/`
+- **No telemetry, it phones nobody.** There is no network I/O anywhere in the
+  codebase. Verify it yourself — this returns nothing:
+  `grep -rn "urlopen\|requests\|httpx\|socket\|http.client" src/`
+  (`urllib.parse` does appear twice, for string handling only: building the
+  prefilled GitHub issue link, and reading the hostname out of a DB connection
+  string to tell local from remote. Neither opens a connection.)
 - **One small, readable, MIT-licensed codebase**, read exactly what it does before you run it.
 - **Tamper-evident receipts**, every decision is hash-chained and independently verifiable (`demo_cli verify`).
 
@@ -50,7 +56,7 @@ git and Claude Code's rewind can't recover an `rm -rf` outside the repo, a dropp
 
 > **Threat model:** cooperative agents making mistakes, not adversarial evasion. An agent actively trying to evade protection is out of scope, no hook solves that.
 
-`0.4.0b7`, public beta.
+`0.4.0b8`, public beta.
 
 Built around one invariant:
 
@@ -178,40 +184,61 @@ Scope for this beta: the Cursor adapter gates **shell commands** only
 
 ## Install
 
-**One command (recommended).** Installs via pipx (bootstrapping pipx if needed),
-wires the hook into the current project, and runs `doctor` to confirm the hook
-actually fires:
+Requires Python 3.9+.
+
+> **Pin to a release, not to `beta`.** The commands below reference a fixed,
+> tagged release so you get exactly the code you reviewed. `@beta` is a moving
+> branch and can change under you; use it only if you specifically want the
+> latest unreleased commit. Replace `v0.4.0-beta.8` below with the
+> [latest release](https://github.com/WePwn/demo_cli/releases) if a newer one exists.
+
+**Manual, verify before you run (recommended).** Read the source and confirm the
+artifact's checksum before anything executes. Nothing is piped into a shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.sh | sh
-```
-```powershell
-irm https://raw.githubusercontent.com/WePwn/demo_cli/beta/install.ps1 | iex
+# 1. read the release notes + published SHA-256 on the release page:
+#    https://github.com/WePwn/demo_cli/releases/tag/v0.4.0-beta.8
+#
+# 2. install that exact tag (pipx puts demo_cli on your global PATH so
+#    Claude Code finds it from any project directory):
+pipx install "git+https://github.com/WePwn/demo_cli.git@v0.4.0-beta.8"
+demo_cli --version        # should print 0.4.0b8
+
+# 3. wire the hook into this project (shadow mode by default) and confirm it fires
+demo_cli init && demo_cli install-hook && demo_cli doctor
 ```
 
-**With pipx (manual).** Puts `demo_cli` in your global PATH so Claude Code can
-find it from any project directory:
+**From a clone (read everything first, verify the tag):**
 
 ```bash
-pipx install git+https://github.com/WePwn/demo_cli.git@beta
-demo_cli --version
-```
-
-**From a clone:**
-
-```bash
-git clone -b beta https://github.com/WePwn/demo_cli.git
+git clone https://github.com/WePwn/demo_cli.git
 cd demo_cli
+git checkout v0.4.0-beta.8
+git verify-tag v0.4.0-beta.8   # if the release is signed; otherwise skip
 pipx install -e .
 demo_cli --version
 ```
 
+**One line (convenience only).** This is `curl | sh`, the exact opaque
+fetch-and-run pattern demo_cli itself escalates. It's here because it's
+convenient, not because it's the safe way. Read the script first, it's ~90
+lines: [install.sh](install.sh) / [install.ps1](install.ps1).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WePwn/demo_cli/v0.4.0-beta.8/install.sh | sh
+```
+```powershell
+irm https://raw.githubusercontent.com/WePwn/demo_cli/v0.4.0-beta.8/install.ps1 | iex
+```
+
+Every path ends by running `demo_cli doctor`, which fails **loud** if the hook
+is installed but not reachable on your PATH — the one case where Claude Code
+would otherwise skip protection silently.
+
 > **Note:** if you install inside a virtualenv, that venv must be active in
 > every shell where you launch `claude`. Otherwise the `demo_cli hook` command
-> is not found and Claude Code silently proceeds without a safety check. Use
-> `demo_cli doctor` to verify the install.
-
-Requires Python 3.9+.
+> is not found and Claude Code proceeds without a safety check. `demo_cli doctor`
+> catches this.
 
 ---
 
@@ -375,6 +402,17 @@ legitimate override; an agent cannot forge it.
 - Reversing already-sent external effects
 - Reversing an action after it has already been undone once (single undo depth per recovery point)
 - Adapters for agents other than Claude Code and Cursor (Aider, Cline, planned)
+
+**Shell parsing is pattern-based, not a full AST (roadmap).** Commands are matched
+with expansion (globs, braces) and structural rules, not a complete shell grammar.
+Deeply nested substitution, unusual quoting, and exotic syntax are handled
+*conservatively* — they fall to the honest escalate path rather than a confident
+capture. A full command-level AST is on the roadmap; until it lands, ambiguous
+parses are treated as unrecoverable, not waved through.
+
+**Database coverage is SQLite and Postgres only.** MySQL, MongoDB, and other
+engines are not yet snapshotted; a destructive command against them has no local
+recovery point and escalates rather than being captured.
 
 ---
 

@@ -16,7 +16,7 @@ import pytest
 
 from demo_cli.config import Config
 from demo_cli.decide import (decide, posture, SAFE, REVIEW, BLOCKED,
-                             ALLOW, REVERSIBLE, DRY_RUN, SANDBOX,
+                             ALLOW, REVERSIBLE, DRY_RUN,
                              CONTEXT_MISMATCH, ESCALATE)
 from demo_cli.guard import Guard
 from demo_cli import recovery, render
@@ -32,7 +32,6 @@ def test_posture_collapses_dispositions():
     assert posture(ALLOW) == SAFE
     assert posture(REVERSIBLE) == SAFE
     assert posture(DRY_RUN) == SAFE
-    assert posture(SANDBOX) == SAFE
     assert posture(CONTEXT_MISMATCH) == REVIEW
     assert posture(ESCALATE) == BLOCKED
 

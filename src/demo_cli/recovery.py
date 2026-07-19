@@ -267,6 +267,15 @@ def _common_capture_root(paths: List[str]) -> Optional[str]:
     affect. Snapshotting it captures a SUPERSET of the damage, so the recovery
     stays provable rather than partial - which is the whole invariant. Returns
     None when no such directory exists, or when it would be absurdly broad."""
+    # Two distinct Windows drive letters have no common root at all. Detect this
+    # with ntpath (available on every OS) so it is caught even when the check
+    # runs on a POSIX host, where backslash paths would otherwise be treated as
+    # literal filenames and collapse to a bogus common root under the cwd.
+    import ntpath
+    drives = {ntpath.splitdrive(p)[0].upper() for p in paths}
+    drives.discard("")
+    if len(drives) > 1:
+        return None
     try:
         root = os.path.commonpath([os.path.abspath(p) for p in paths])
     except ValueError:                                  # different drives (Windows)

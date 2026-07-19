@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 
 from .context import redact
 from .decide import INVARIANT
+from .version import release_tag
 
 RECEIPT_VERSION = "2.0"
 GENESIS = "0" * 64
@@ -332,7 +333,7 @@ def share_card(receipt: dict, *, repo: str = "github.com/WePwn/demo_cli") -> str
         "",
         "  tamper-evident: this receipt links to the one before it.",
         "  verify the chain yourself:",
-        f"    pipx install git+https://{repo}.git@beta && demo_cli verify",
+        f"    pipx install git+https://{repo}.git@{release_tag()} && demo_cli verify",
         "```",
     ]
     return "\n".join(lines)
